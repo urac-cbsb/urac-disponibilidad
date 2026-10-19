@@ -1,0 +1,87 @@
+rules_version = '2';
+
+// Reglas de seguridad · URAC Disponibilidad
+// Se pegan en Firebase → Firestore Database → Reglas → Publicar.
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    // Solo cuentas con correo confirmado.
+    function signed() { return request.auth != null && request.auth.token.email_verified == true; }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function perfilPath() { return /databases/$(db)/documents/nomina/$(myEmail()); }
+    function configPath() { return /databases/$(db)/documents/config/inicial; }
+    function member() { return signed() && exists(perfilPath()) && get(perfilPath()).data.activo == true; }
+    function rol() { return get(perfilPath()).data.rol; }
+    function lider() { return member() && rol() in ['lider', 'admin']; }
+    function gerencia() { return member() && rol() in ['gerencia', 'lider', 'admin']; }
+
+    function nominaValida(d) {
+      return d.keys().hasOnly(['nombre', 'cargo', 'rol', 'activo'])
+        && d.nombre is string && d.nombre.size() > 1 && d.nombre.size() <= 100
+        && d.cargo is string && d.cargo.size() <= 100
+        && d.rol in ['rescatista', 'gerencia', 'lider', 'admin']
+        && d.activo is bool;
+    }
+
+    // Marca de configuración inicial: permite registrar al primer Administrador una sola vez.
+    match /config/inicial {
+      allow read: if signed();
+      allow create: if signed() && !exists(configPath())
+        && request.resource.data.keys().hasOnly(['por', 'en'])
+        && request.resource.data.por == myEmail()
+        && existsAfter(perfilPath()) && getAfter(perfilPath()).data.rol == 'admin';
+      allow update, delete: if false;
+    }
+
+    // Nómina: cada integrante ve solo su ficha; el Líder y el Administrador ven y editan todas.
+    match /nomina/{email} {
+      allow read: if (signed() && email == myEmail()) || lider();
+      allow create: if nominaValida(request.resource.data) && email == email.lower() && (
+        lider() ||
+        (signed() && email == myEmail() && !exists(configPath()) && existsAfter(configPath())
+          && request.resource.data.rol == 'admin' && request.resource.data.activo == true));
+      allow update: if lider() && nominaValida(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Llamados (fases de Monitoreo, Alerta y Movilización).
+    match /llamados/{id} {
+      function llamadoValido(d) {
+        return d.fase in ['monitoreo', 'alerta', 'movilizacion']
+          && d.nivel in ['local', 'regional', 'sno']
+          && d.abierto is bool
+          && d.descripcion is string && d.descripcion.size() <= 500;
+      }
+      function abierto() { return get(/databases/$(db)/documents/llamados/$(id)).data.abierto == true; }
+
+      allow read: if member();
+      allow create: if lider() && llamadoValido(request.resource.data) && request.resource.data.abierto == true;
+      allow update: if lider() && llamadoValido(request.resource.data);
+      allow delete: if false;
+
+      // Respuesta de cada integrante: solo él la escribe; solo él y el Líder la leen.
+      match /respuestas/{email} {
+        allow read: if lider() || (member() && email == myEmail());
+        allow create, update: if member() && email == myEmail() && abierto()
+          && request.resource.data.keys().hasOnly(['estado', 'hasta', 'eta', 'en'])
+          && request.resource.data.estado in ['si', 'no']
+          && (request.resource.data.hasta == null || request.resource.data.hasta is timestamp)
+          && (request.resource.data.eta == null || request.resource.data.eta is timestamp)
+          && request.resource.data.en == request.time;
+        allow delete: if false;
+      }
+
+      // Resumen anónimo para Gerencia: solo totales, sin nombres ni correos.
+      match /resumen/{doc} {
+        allow read: if gerencia();
+        allow create: if lider() && request.resource.data.keys().hasOnly(['r']);
+        allow update: if member() && abierto()
+          && request.resource.data.keys().hasOnly(['r'])
+          && request.resource.data.r.diff(resource.data.r).affectedKeys().hasOnly([request.auth.uid])
+          && request.resource.data.r[request.auth.uid].keys().hasOnly(['e', 'h', 't'])
+          && request.resource.data.r[request.auth.uid].e in ['si', 'no'];
+        allow delete: if false;
+      }
+    }
+  }
+}
