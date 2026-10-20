@@ -126,7 +126,8 @@ service cloud.firestore {
           && request.resource.data.r.diff(resource.data.r).affectedKeys().size() <= 1
           && (lider() || (
                request.resource.data.r.diff(resource.data.r).affectedKeys().hasOnly([miClave()])
-               && request.resource.data.r[miClave()].keys().hasOnly(['e', 'h', 't', 'c', 'n'])
+               && request.resource.data.r[miClave()].keys().hasOnly(['e', 'h', 't', 'c', 'n', 'g'])
+               && request.resource.data.r[miClave()].get('g', get(perfilPath()).data.cargo) == get(perfilPath()).data.cargo
                && request.resource.data.r[miClave()].e in ['si', 'no']
                && request.resource.data.r[miClave()].get('c', null) == miCordada()
                && request.resource.data.r[miClave()].get('n', '') == miNombre()));

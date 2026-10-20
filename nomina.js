@@ -52,3 +52,9 @@ export const CARGOS_GERENCIA = [
   'Jefe de Operaciones', 'Jefe de Planificación', 'Jefe de Logística',
   'Jefe de Administración y Finanzas', 'Líder Alfa', 'Líder Bravo', 'LUMED'
 ];
+
+// Puesto de Comando: no integra las cordadas.
+export const CARGOS_PUESTO_COMANDO = [
+  'Líder de Unidad', 'Jefe de Operaciones', 'Jefe de Planificación', 'Jefe de Logística',
+  'Jefe de Administración y Finanzas', 'LUMED'
+];

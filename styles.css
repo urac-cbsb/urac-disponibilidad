@@ -252,3 +252,7 @@ ol.miembros-cordada { margin: 0; padding: 0 0 0 22px; }
 ol.miembros-cordada li { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 44px; border-bottom: 1px solid #262626; padding: 4px 0; }
 ol.miembros-cordada li::marker { color: var(--texto-suave); }
 ol.miembros-cordada .per { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+
+/* Puesto de Comando */
+.cordada-box.pc { border-color: var(--amarillo); }
+.cordada-box.pc .per { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }

@@ -10,7 +10,7 @@ import {
   serverTimestamp, Timestamp, updateDoc, setDoc, getDocs, orderBy
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from './config.js';
-import { NOMBRES, CARGOS, SUGERIDO, CATEGORIAS, CATEGORIA_LIBRE, CARGOS_UNICOS, CARGOS_GERENCIA } from './nomina.js';
+import { NOMBRES, CARGOS, SUGERIDO, CATEGORIAS, CATEGORIA_LIBRE, CARGOS_UNICOS, CARGOS_GERENCIA, CARGOS_PUESTO_COMANDO } from './nomina.js';
 import { SAN_BERNARDO, obtenerPronostico, buscarLugares, proximas24, proximos5 } from './clima.js';
 
 // ---------- Constantes ----------
@@ -246,8 +246,10 @@ function asegurarClima() {
 // Si hay integrantes con perfil de cordada, se procura que cada cordada lleve uno de cada perfil;
 // los cupos restantes se completan con los siguientes disponibles. La última puede quedar incompleta.
 const TAM_CORDADA = 6;
+const esPC = (cargo) => CARGOS_PUESTO_COMANDO.includes(cargo);
 function armarCordadas(disponibles) {
-  const pool = disponibles.map((x, i) => ({ ...x, orden: i }));
+  // Solo rescatistas: el Puesto de Comando no integra cordadas.
+  const pool = disponibles.filter((x) => !esPC(x.cargo)).map((x, i) => ({ ...x, orden: i }));
   const cordadas = [];
   while (pool.length && cordadas.length < NOMBRES_CORDADA.length) {
     const miembros = [];
@@ -285,12 +287,12 @@ const claveResumen = (email) => String(email).toLowerCase().replace(/[^a-z0-9]/g
 // es un ingreso manual del Líder o Administrador en nombre de ese integrante.
 async function guardarRespuesta({ estado, hasta = null, para = null }) {
   const id = S.llamado.id;
-  const quien = para || { email: S.email, nombre: S.perfil.nombre, cordada: S.perfil.cordada };
+  const quien = para || { email: S.email, nombre: S.perfil.nombre, cordada: S.perfil.cordada, cargo: S.perfil.cargo };
   const b = writeBatch(db);
   const hastaTs = hasta ? Timestamp.fromDate(hasta) : null;
   const texto = estado === 'no' ? 'NO DISPONIBLE' : 'DISPONIBLE ' + (hasta ? 'hasta ' + cuando(hasta) : 'hasta nuevo aviso');
   b.set(doc(db, 'llamados', id, 'respuestas', quien.email), { estado, hasta: hastaTs, eta: null, en: serverTimestamp() });
-  b.update(doc(db, 'llamados', id, 'resumen', 'actual'), { ['r.' + claveResumen(quien.email)]: { e: estado, h: hastaTs, t: null, c: quien.cordada || null, n: quien.nombre } });
+  b.update(doc(db, 'llamados', id, 'resumen', 'actual'), { ['r.' + claveResumen(quien.email)]: { e: estado, h: hastaTs, t: null, c: quien.cordada || null, n: quien.nombre, g: quien.cargo || '' } });
   if (para) evento(b, id, 'manual', S.llamado.fase, `${quien.nombre}: ${texto}`);
   else evento(b, id, 'respuesta', S.llamado.fase, texto);
   await b.commit();
@@ -301,7 +303,7 @@ async function guardarRespuesta({ estado, hasta = null, para = null }) {
 function fichaManual() {
   const n = integrantes().find((x) => x.email === S.manual.email);
   if (!n) throw new Error('Elige un integrante.');
-  return { email: n.email, nombre: n.nombre, cordada: n.cordada || null };
+  return { email: n.email, nombre: n.nombre, cordada: n.cordada || null, cargo: n.cargo || '' };
 }
 
 // Hora exacta elegida en un campo "HH:MM" (si ya pasó hoy, es mañana).
@@ -733,6 +735,21 @@ function cordadaHtml(n) {
     <span>${ok ? `Cordada mínima (${CORDADA_MIN}) alcanzada${n > CORDADA_MIN ? ' · ' + n + ' disponibles' : ''}` : `Faltan ${CORDADA_MIN - n} para la cordada mínima (${CORDADA_MIN})`}</span></div>`;
 }
 
+// Puesto de Comando: Líder de Unidad, jefes y LUMED, con su estado.
+function puestoComandoHtml(miembros, conFoto) {
+  const EST = { si: ['p-si', 'DISPONIBLE'], vence: ['p-vence', 'VENCE PRONTO'], no: ['p-no', 'NO DISPONIBLE'], sr: ['p-sr', 'SIN RESPUESTA'], vencida: ['p-sr', 'VENCIDA'] };
+  const disp = miembros.filter((m) => m.c === 'si' || m.c === 'vence').length;
+  const filas = CARGOS_PUESTO_COMANDO.map((cargo) => {
+    const m = miembros.find((x) => x.cargo === cargo);
+    if (!m) return `<li><span class="cat">${esc(cargo)}</span><span class="suave">${conFoto ? 'Sin asignar' : 'Sin respuesta'}</span></li>`;
+    const est = EST[m.c] || EST.sr;
+    return `<li><span class="cat">${esc(cargo)}</span><span class="per">${conFoto ? avatar(m.email, m.nombre, 28) : ''}<span>${esc(nombreCorto(m.nombre))}</span>
+      <span class="pill ${est[0]}">${est[1]}</span></span></li>`;
+  }).join('');
+  return `<div class="cordada-box pc"><div class="cb-top"><b>PUESTO DE COMANDO</b><span class="pill ${disp ? 'p-si' : 'p-sr'}">${disp}/${CARGOS_PUESTO_COMANDO.length}</span></div>
+    <ul class="puestos">${filas}</ul></div>`;
+}
+
 function cordadasHtml(res, conNombres) {
   const cajas = res.cordadas.map((c) => {
     const n = c.miembros.length;
@@ -797,9 +814,10 @@ function vistaTablero() {
       <div class="cont gris"><b>${k.sr}</b><span>Sin respuesta</span></div>
     </div>
     ${cordadaHtml(k.si)}
+    ${puestoComandoHtml(filas.filter((f) => esPC(f.cargo)).map((f) => ({ email: f.email, nombre: f.nombre, cargo: f.cargo, c: f.c, hasta: f.r && aFecha(f.r.hasta) })), true)}
     ${cordadasHtml(armarCordadas(filas.filter((f) => f.c === 'si' || f.c === 'vence')
         .sort((a, b) => (aFecha(a.r.en)?.getTime() || 0) - (aFecha(b.r.en)?.getTime() || 0))
-        .map((f) => ({ email: f.email, nombre: f.nombre, cat: f.cordada || null }))), true)}
+        .map((f) => ({ email: f.email, nombre: f.nombre, cat: f.cordada || null, cargo: f.cargo }))), true)}
     <div class="filtros" role="group" aria-label="Filtro">${fil('todos', 'Todos ' + filas.length)}${fil('si', 'Disp.')}${fil('no', 'No disp.')}${fil('sr', 'Sin resp.')}</div>
     <ul class="lista">${lista.map((f) => `<li>
       <div class="con-foto">${avatar(f.email, f.nombre, 36)}<div><div class="nom">${esc(nombreCorto(f.nombre))}</div><small>${esc(f.cordada ? CAT_NOMBRE[f.cordada] || f.cargo : f.cargo)}</small></div></div>
@@ -856,7 +874,7 @@ function vistaResumen() {
   entradas.forEach((e) => {
     const c = clasificar(e, ahora);
     if (c === 'si' || c === 'vence') {
-      si++; disp.push({ cat: e.c || null, nombre: e.n || 'Integrante', hasta: aFecha(e.h) });
+      si++; disp.push({ cat: e.c || null, nombre: e.n || 'Integrante', hasta: aFecha(e.h), cargo: e.g || '' });
       const h = aFecha(e.h);
       [2, 6, 12].forEach((x) => { if (!h || h.getTime() > ahora + x * H) vig[x]++; });
     } else if (c === 'no') no++;
@@ -870,6 +888,7 @@ function vistaResumen() {
     <div class="barra" role="img" aria-label="${si} disponibles, ${no} no disponibles, ${sr} sin respuesta">
       <div style="flex:${si}; background: var(--verde)"></div><div style="flex:${no}; background: var(--rojo)"></div><div style="flex:${sr}; background:#3A3A3A"></div></div>
     ${cordadaHtml(si)}
+    ${puestoComandoHtml(entradas.filter((e) => esPC(e.g)).map((e) => ({ nombre: e.n || '', cargo: e.g, c: clasificar(e, ahora) })), false)}
     ${cordadasHtml(armarCordadas(disp), true)}
     <label>Disponibles que siguen vigentes</label>
     <div class="tres">${[2, 6, 12].map((x) => `<div class="cont panel"><b>${vig[x]}</b><span>en ${x} h</span></div>`).join('')}</div>
@@ -955,8 +974,12 @@ function vistaInforme() {
   const EST = { si: 'Disponible', vence: 'Disponible', no: 'No disponible', sr: 'Sin respuesta', vencida: 'Disponibilidad vencida' };
   const disponibles = filas.filter((f) => f.c === 'si' || f.c === 'vence')
     .sort((a, b) => (aFecha(a.r.en)?.getTime() || 0) - (aFecha(b.r.en)?.getTime() || 0))
-    .map((f) => ({ email: f.email, nombre: f.nombre, cat: f.cordada || null }));
+    .map((f) => ({ email: f.email, nombre: f.nombre, cat: f.cordada || null, cargo: f.cargo }));
   const cord = armarCordadas(disponibles);
+  const tablaPC = CARGOS_PUESTO_COMANDO.map((cargo) => {
+    const f = filas.find((x) => x.cargo === cargo);
+    return `<tr><td>${esc(cargo)}</td><td>${f ? esc(f.nombre) : '—'}</td><td>${f ? EST[f.c] : 'Sin asignar'}</td></tr>`;
+  }).join('');
   const tablaCordadas = cord.cordadas.map((c) => `<p><b>Cordada ${c.nombre}</b> (${c.miembros.length}/${TAM_CORDADA})</p>
     <table><tr><th>N°</th><th>Integrante</th><th>Perfil de cordada</th></tr>${c.miembros.map((m, i) => `<tr><td>${i + 1}</td><td>${esc(m.nombre)}</td><td>${esc(m.cat ? CAT_NOMBRE[m.cat] || '' : '—')}</td></tr>`).join('')}</table>`).join('')
     || '<p>No hubo disponibles suficientes para armar una cordada.</p>';
@@ -985,6 +1008,8 @@ function vistaInforme() {
       <h2>Disponibilidad ${fin ? 'al cierre' : 'al momento del informe'}</h2>
       <p>Disponibles: <b>${k.si}</b> · No disponibles: <b>${k.no}</b> · Sin respuesta o vencida: <b>${k.sr}</b> · Total integrantes: <b>${filas.length}</b></p>
       <table><tr><th>Integrante</th><th>Perfil de cordada</th><th>Estado</th><th>Resp.</th></tr>${tablaPersonal}</table>
+      <h2>Puesto de Comando</h2>
+      <table><tr><th>Cargo</th><th>Integrante</th><th>Estado</th></tr>${tablaPC}</table>
       <h2>Cordadas ${fin ? 'al cierre' : 'al momento del informe'}</h2>
       ${tablaCordadas}
       ${I.mapa ? `<h2>Imagen del lugar</h2><img class="mapa-img" src="${esc(I.mapa.img)}" alt="Imagen georreferencial del lugar">` : ''}
