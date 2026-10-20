@@ -410,7 +410,8 @@ function encabezado() {
   const p = S.perfil;
   return `<header class="top">
     <div class="marca">${LOGOS}</div>
-    ${p ? `<div class="quien">${esc(nombreCorto(p.nombre))}<small>${esc(ROLES[p.rol] || '')}</small></div>` : ''}
+    ${S.user ? `<div class="quien">${p ? `${esc(nombreCorto(p.nombre))}<small>${esc(ROLES[p.rol] || '')}</small>` : ''}
+      <button class="salir" data-act="salir">Cerrar sesión</button></div>` : ''}
   </header>`;
 }
 
@@ -570,7 +571,7 @@ function vistaEstado() {
       ${ficha()}
       ${avisos()}
       ${esLider() ? '<button class="principal" data-act="tab" data-v="abrir">ABRIR LLAMADO</button>' : ''}
-      <div class="hueco"></div><button class="enlace" data-act="salir">Cerrar sesión</button>
+      <div class="hueco"></div>
     </main>`;
   }
   const r = S.miResp;
@@ -616,7 +617,7 @@ function vistaEstado() {
   }
   return `${banda(l)}<main>${ficha()}${avisos()}${cuerpo}
     ${terreno(l)}
-    <div class="hueco"></div><button class="enlace" data-act="salir">Cerrar sesión</button></main>`;
+    <div class="hueco"></div></main>`;
 }
 
 // --- Abrir llamado (Líder) ---

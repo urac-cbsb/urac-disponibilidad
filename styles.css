@@ -216,3 +216,7 @@ ul.informes li.destacado { background: var(--panel); padding: 10px; border: 1px 
   .informe { padding: 0; }
   .informe table, .informe img { page-break-inside: avoid; }
 }
+
+/* Cerrar sesión, siempre visible en el encabezado */
+.quien { display: flex; flex-direction: column; align-items: flex-end; }
+.salir { min-height: 36px; margin-top: 2px; padding: 0 10px; background: transparent; border: 1px solid var(--borde); color: var(--amarillo); font-size: 13px; font-weight: 600; }
