@@ -358,7 +358,6 @@ async function cambiarFase(fase) {
   b.update(doc(db, 'llamados', l.id), cambios);
   evento(b, l.id, 'fase', fase, `De ${FASES[l.fase]} a ${FASES[fase]}`);
   await b.commit();
-  abrirWhatsApp(mensajeLlamado({ ...l, fase }, true));
 }
 
 async function cerrarLlamado() {
