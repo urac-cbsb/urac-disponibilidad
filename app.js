@@ -103,7 +103,8 @@ function nombreCorto(n) {
   const p = String(n || '').split(' ').filter(Boolean);
   return p.length >= 3 ? `${p[0]} ${p[1]} ${p[2][0]}.` : n;
 }
-function linkApp() { return location.origin + location.pathname; }
+// El parámetro renueva la vista previa (escudo URAC) que WhatsApp guarda en caché.
+function linkApp() { return location.origin + location.pathname + '?urac'; }
 function abrirWhatsApp(texto) { window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener'); }
 function errTexto(e) {
   const c = e && e.code ? e.code : '';
