@@ -284,12 +284,10 @@ async function abrirLlamado() {
   const desc = S.f.desc.trim();
   if (!desc) { S.err = 'Escribe una descripción breve.'; return; }
   const ahora = new Date();
+  // Solo puede haber un llamado activo a la vez.
+  if (S.llamado) throw new Error('Ya hay un llamado activo. Ciérralo antes de abrir otro.');
   const total = integrantes().length;
   const b = writeBatch(db);
-  if (S.llamado) {
-    b.update(doc(db, 'llamados', S.llamado.id), { abierto: false, cerradoEn: serverTimestamp(), cerradoPor: S.email });
-    evento(b, S.llamado.id, 'cierre', S.llamado.fase, 'Cerrado al abrir un nuevo llamado');
-  }
   const ref = doc(collection(db, 'llamados'));
   const plazo = (S.f.nivel === 'sno' && S.f.fase === 'alerta') ? Timestamp.fromDate(new Date(ahora.getTime() + PLAZO_SNO_H * H)) : null;
   const lugar = S.f.lugar || SAN_BERNARDO;
@@ -352,6 +350,29 @@ async function subirMapa(archivo) {
   evento(b, l.id, 'mapa', l.fase, 'Imagen georreferencial del lugar cargada');
   await b.commit();
   S.msg = 'Imagen del lugar publicada para todos los integrantes.';
+}
+
+// Elimina un llamado cerrado y todo su contenido (informe, bitácora, respuestas e imagen). No se puede deshacer.
+async function eliminarInforme(id) {
+  const c = S.cerrados.find((x) => x.id === id);
+  if (!c) return;
+  const a = aFecha(c.creadoEn);
+  if (!confirm(`¿Eliminar el informe del llamado del ${a ? cuando(a) : ''}?\n\nSe borrará también su bitácora, respuestas e imagen. No se puede deshacer.`)) return;
+  const refs = [];
+  for (const sub of ['eventos', 'respuestas', 'resumen', 'adjuntos']) {
+    const qs = await getDocs(collection(db, 'llamados', id, sub));
+    qs.forEach((d) => refs.push(d.ref));
+  }
+  for (let i = 0; i < refs.length; i += 400) {
+    const b = writeBatch(db);
+    refs.slice(i, i + 400).forEach((r) => b.delete(r));
+    await b.commit();
+  }
+  const b = writeBatch(db);
+  b.delete(doc(db, 'llamados', id));
+  await b.commit();
+  if (S.ultimoCerrado === id) S.ultimoCerrado = null;
+  S.msg = 'Informe eliminado.';
 }
 
 async function cargarInforme(id) {
@@ -627,6 +648,7 @@ function vistaEstado() {
 
 // --- Abrir llamado (Líder) ---
 function vistaAbrir() {
+  if (S.llamado) return vistaTablero();
   const seg = (campo, opciones, clase) => `<div class="tres seg">${Object.entries(opciones).map(([k, v]) =>
     `<button data-act="set" data-k="${campo}" data-v="${k}" class="${S.f[campo] === k ? 'on' : ''} ${clase ? clase + k : ''}" aria-pressed="${S.f[campo] === k}">${v}</button>`).join('')}</div>`;
   const plazo = S.f.nivel === 'sno' && S.f.fase === 'alerta';
@@ -696,7 +718,8 @@ function listaInformes() {
     const nuevo = c.id === S.ultimoCerrado;
     return `<li class="${nuevo ? 'destacado' : ''}"><div><div class="nom">${a ? cuando(a) : ''} · ${esc(NIVELES[c.nivel] || '')}</div>
       <small>${esc(c.descripcion || '')}${a && z ? ' · duró ' + dur(z - a) : ''}</small></div>
-      <button class="${nuevo ? 'principal' : 'contorno'} chico" data-act="informe" data-v="${c.id}">INFORME</button></li>`;
+      <div class="acciones-inf"><button class="${nuevo ? 'principal' : 'contorno'} chico" data-act="informe" data-v="${c.id}">INFORME</button>
+      ${esLider() ? `<button class="eliminar" data-act="eliminarInforme" data-v="${c.id}" aria-label="Eliminar informe">ELIMINAR</button>` : ''}</div></li>`;
   }).join('');
 }
 
@@ -1010,6 +1033,7 @@ $app.addEventListener('click', (e) => {
       try { await cargarInforme(v); } catch (err) { S.informe = null; S.tab = S.tabPrevio || 'estado'; throw err; }
     }); break;
     case 'imprimir': window.print(); break;
+    case 'eliminarInforme': accion(() => eliminarInforme(v)); break;
     case 'abrirLlamado': accion(abrirLlamado); break;
     case 'fase': accion(() => cambiarFase(v)); break;
     case 'cerrar': accion(cerrarLlamado); break;

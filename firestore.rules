@@ -74,7 +74,7 @@ service cloud.firestore {
       allow update: if lider() && llamadoValido(request.resource.data);
       allow delete: if false;
 
-      // Bitácora de movimientos (base del informe): nadie la modifica ni la borra.
+      // Bitácora de movimientos (base del informe): no se modifica; solo se borra al eliminar un llamado cerrado.
       match /eventos/{ev} {
         allow read: if informe();
         allow create: if member()
