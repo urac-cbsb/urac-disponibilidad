@@ -13,7 +13,8 @@ service cloud.firestore {
     function member() { return signed() && exists(perfilPath()) && get(perfilPath()).data.activo == true; }
     function rol() { return get(perfilPath()).data.rol; }
     function lider() { return member() && rol() in ['lider', 'admin']; }
-    function gerencia() { return member() && rol() in ['gerencia', 'lider', 'admin']; }
+    // Gerencia según el cargo: jefes, Líder Alfa, Líder Bravo y LUMED (además del Líder y el Administrador).
+    function gerencia() { return lider() || (member() && get(perfilPath()).data.cargo in ['Jefe de Operaciones', 'Jefe de Planificación', 'Jefe de Logística', 'Jefe de Administración y Finanzas', 'Líder Alfa', 'Líder Bravo', 'LUMED']); }
 
     function miCordada() { return get(perfilPath()).data.get('cordada', null); }
     function miNombre() { return get(perfilPath()).data.nombre; }

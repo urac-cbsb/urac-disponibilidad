@@ -22,9 +22,9 @@ export const CARGOS = [
 export const SUGERIDO = {
   'César Norambuena Lagos': { cargo: 'Líder de Unidad', rol: 'lider' },
   'Daniel Camu Albornoz': { cargo: 'Jefe de Operaciones', rol: 'lider' },
-  'Daniel Valenzuela Soto': { cargo: 'Jefe de Planificación', rol: 'gerencia' },
-  'Jeison Castro Carrasco': { cargo: 'Jefe de Logística', rol: 'gerencia' },
-  'Bastián Galaz Retamal': { cargo: 'LUMED', rol: 'gerencia' },
+  'Daniel Valenzuela Soto': { cargo: 'Jefe de Planificación', rol: 'rescatista' },
+  'Jeison Castro Carrasco': { cargo: 'Jefe de Logística', rol: 'rescatista' },
+  'Bastián Galaz Retamal': { cargo: 'LUMED', rol: 'rescatista' },
   'Fabián Escobar Astudillo': { cargo: 'Oficial de Seguridad', rol: 'rescatista' }
 };
 
@@ -40,3 +40,15 @@ export const CATEGORIAS = [
   { id: 'apoyo', nombre: 'Apoyo' }
 ];
 export const CATEGORIA_LIBRE = 'apoyo';
+
+// Cargos de mando: solo una persona puede tener cada uno.
+export const CARGOS_UNICOS = [
+  'Líder de Unidad', 'Jefe de Operaciones', 'Jefe de Planificación', 'Jefe de Logística',
+  'Jefe de Administración y Finanzas', 'Líder Alfa', 'Líder Bravo', 'LUMED', 'Oficial de Seguridad'
+];
+
+// Gerencia (ve el detalle de los integrantes): se asigna sola según el cargo.
+export const CARGOS_GERENCIA = [
+  'Jefe de Operaciones', 'Jefe de Planificación', 'Jefe de Logística',
+  'Jefe de Administración y Finanzas', 'Líder Alfa', 'Líder Bravo', 'LUMED'
+];

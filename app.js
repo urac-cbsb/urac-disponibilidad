@@ -10,7 +10,7 @@ import {
   serverTimestamp, Timestamp, updateDoc, setDoc, getDocs, orderBy
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from './config.js';
-import { NOMBRES, CARGOS, SUGERIDO, CATEGORIAS, CATEGORIA_LIBRE } from './nomina.js';
+import { NOMBRES, CARGOS, SUGERIDO, CATEGORIAS, CATEGORIA_LIBRE, CARGOS_UNICOS, CARGOS_GERENCIA } from './nomina.js';
 import { SAN_BERNARDO, obtenerPronostico, buscarLugares, proximas24, proximos5 } from './clima.js';
 
 // ---------- Constantes ----------
@@ -22,7 +22,8 @@ const FASES = { monitoreo: 'MONITOREO', alerta: 'ALERTA', movilizacion: 'MOVILIZ
 const FASES_APERTURA = { monitoreo: 'MONITOREO', alerta: 'ALERTA', movilizacion: 'MOVILIZACIÓN' };
 const FASES_CLIMA = ['monitoreo', 'alerta', 'movilizacion'];
 const NIVELES = { local: 'Local', regional: 'Regional', sno: 'SNO' };
-const ROLES = { rescatista: 'Rescatista', gerencia: 'Gerencia', lider: 'Líder', admin: 'Administrador' };
+// Perfil en la app que asigna el Líder. "Gerencia" ya no se elige: la da el cargo.
+const ROLES = { rescatista: 'Rescatista', lider: 'Líder', admin: 'Administrador' };
 const H = 3600 * 1000;
 const LOGOS = '<img src="logo.png" alt="Escudo URAC" class="logo"><img src="cbsb.png" alt="Escudo Cuerpo de Bomberos de San Bernardo" class="logo">';
 const CAT_NOMBRE = Object.fromEntries(CATEGORIAS.map((c) => [c.id, c.nombre]));
@@ -50,7 +51,20 @@ let subs = { perfil: null, miFoto: null, llamados: null, miResp: null, respuesta
 let llamadoId = null;
 
 const esLider = () => S.perfil && ['lider', 'admin'].includes(S.perfil.rol);
-const esGerencia = () => S.perfil && S.perfil.rol === 'gerencia';
+const esGerencia = () => S.perfil && !['lider', 'admin'].includes(S.perfil.rol) && CARGOS_GERENCIA.includes(S.perfil.cargo);
+// Etiqueta del perfil que se muestra (Gerencia sale del cargo).
+function etiquetaPerfil(p) {
+  if (!p) return '';
+  if (p.rol === 'lider' || p.rol === 'admin') return ROLES[p.rol];
+  return CARGOS_GERENCIA.includes(p.cargo) ? 'Gerencia' : 'Rescatista';
+}
+// Rol guardado: "gerencia" de versiones anteriores se trata como rescatista.
+const rolSel = (r) => (r === 'lider' || r === 'admin') ? r : 'rescatista';
+// Cargo de mando ya asignado a otra persona activa.
+function cargoOcupado(cargo, emailPropio) {
+  if (!CARGOS_UNICOS.includes(cargo)) return null;
+  return S.nomina.find((n) => n.activo && n.cargo === cargo && n.email !== emailPropio) || null;
+}
 // El Administrador gestiona la cuenta y tiene las facultades del Líder, pero no integra la URAC:
 // no responde disponibilidad ni cuenta en totales ni cordadas.
 const esAdmin = () => S.perfil && S.perfil.rol === 'admin';
@@ -417,6 +431,8 @@ async function guardarIntegrante() {
   const nombre = S.f.nNombre.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { S.err = 'Escribe un correo válido.'; return; }
   if (!nombre) { S.err = 'Escribe el nombre.'; return; }
+  const ocupado = cargoOcupado(S.f.nCargo, email);
+  if (ocupado) { S.err = `El cargo ${S.f.nCargo} ya lo tiene ${ocupado.nombre}. Cámbiale el cargo primero.`; return; }
   const b = writeBatch(db);
   b.set(doc(db, 'nomina', email), { nombre, cargo: S.f.nCargo, rol: S.f.nRol, cordada: S.f.nCordada || null, activo: true });
   await b.commit();
@@ -459,7 +475,7 @@ function encabezado() {
   const p = S.perfil;
   return `<header class="top">
     <div class="marca">${LOGOS}</div>
-    ${S.user ? `<div class="quien">${p ? `${esc(nombreCorto(p.nombre))}<small>${esc(ROLES[p.rol] || '')}</small>` : ''}
+    ${S.user ? `<div class="quien">${p ? `${esc(nombreCorto(p.nombre))}<small>${esc(etiquetaPerfil(p))}</small>` : ''}
       <button class="salir" data-act="salir">Cerrar sesión</button></div>` : ''}
   </header>`;
 }
@@ -892,6 +908,7 @@ function vistaNomina() {
       <div class="campo"><label for="nCargo">Cargo</label><select id="nCargo" data-bind="nCargo">${CARGOS.map((c) => `<option ${S.f.nCargo === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
       <div class="campo"><label for="nRol">Perfil en la app</label><select id="nRol" data-bind="nRol">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${S.f.nRol === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
     </div>
+    <p class="suave">El acceso de Gerencia se asigna solo según el cargo (jefes, Líder Alfa, Líder Bravo y LUMED). Los cargos de mando no se pueden repetir.</p>
     <div class="campo"><label for="nCordada">Perfil de cordada</label><select id="nCordada" data-bind="nCordada">${opcCordada(S.f.nCordada)}</select></div>
     ${avisos()}
     <button class="principal" data-act="agregar" ${S.ocupado ? 'disabled' : ''}>AGREGAR</button>
@@ -899,13 +916,13 @@ function vistaNomina() {
     ${sinPerfil ? `<p class="aviso">${sinPerfil} integrante(s) activos sin perfil de cordada: solo podrán ocupar el puesto de Apoyo.</p>` : ''}
     <ul class="miembros">${S.nomina.map((n, i) => `<li class="miembro">
       <div class="m-top">${avatar(n.email, n.nombre, 52)}
-        <div><div class="nom" style="${n.activo ? '' : 'color: var(--texto-suave); text-decoration: line-through'}">${esc(n.nombre)}</div><small>${esc(n.cargo)} · ${esc(n.email)}</small></div></div>
+        <div><div class="nom" style="${n.activo ? '' : 'color: var(--texto-suave); text-decoration: line-through'}">${esc(n.nombre)}</div><small>${esc(n.cargo)} · ${esc(etiquetaPerfil(n))} · ${esc(n.email)}</small></div></div>
       <div class="dos">
         <div class="campo"><label for="car-${i}">Cargo</label><select id="car-${i}" data-act-change="cargo" data-email="${esc(n.email)}">${(CARGOS.includes(n.cargo) ? CARGOS : [n.cargo, ...CARGOS]).map((c) => `<option ${n.cargo === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
         <button class="neutro" style="align-self:end" data-act="editarNombre" data-email="${esc(n.email)}">EDITAR NOMBRE</button>
       </div>
       <div class="dos">
-        <div class="campo"><label for="rol-${i}">Perfil en la app</label><select id="rol-${i}" data-act-change="rol" data-email="${esc(n.email)}">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${n.rol === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div class="campo"><label for="rol-${i}">Perfil en la app</label><select id="rol-${i}" data-act-change="rol" data-email="${esc(n.email)}">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${rolSel(n.rol) === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
         ${n.rol === 'admin' ? '<p class="suave">Administrador del sistema: no integra la URAC ni cuenta en cordadas.</p>'
           : `<div class="campo"><label for="cor-${i}">Perfil de cordada</label><select id="cor-${i}" data-act-change="cordada" data-email="${esc(n.email)}">${opcCordada(n.cordada || '')}</select></div>`}
       </div>
@@ -1040,7 +1057,13 @@ $app.addEventListener('change', (e) => {
   if (t.dataset.actChange === 'manualPara') { S.manual = { email: t.value, paso: null }; S.err = ''; S.msg = ''; t.blur(); render(); }
   if (t.dataset.actChange === 'cargo') {
     const email = t.dataset.email;
-    accion(async () => { await updateDoc(doc(db, 'nomina', email), { cargo: t.value }); S.msg = 'Cargo actualizado.'; });
+    const ocupado = cargoOcupado(t.value, email);
+    if (ocupado) {
+      S.err = `El cargo ${t.value} ya lo tiene ${ocupado.nombre}. Cámbiale el cargo primero.`;
+      t.blur(); render();
+    } else {
+      accion(async () => { await updateDoc(doc(db, 'nomina', email), { cargo: t.value }); S.msg = 'Cargo actualizado.'; });
+    }
   }
   if (t.dataset.actChange === 'cordada') {
     const email = t.dataset.email;
