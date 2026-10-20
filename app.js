@@ -39,8 +39,8 @@ const S = {
   tab: 'estado', paso: null, filtro: 'todos',
   llamado: null, miResp: null, respuestas: {}, nomina: [], resumen: null, fotos: {},
   clima: { clave: '', datos: null, err: '', cargando: false, en: 0 }, lugares: [],
-  mapa: null, cerrados: [], ultimoCerrado: null, informe: null,
-  f: { email: '', clave: '', nombre: '', fase: 'alerta', nivel: 'local', desc: '', hora: '', lugarQ: '', lugar: null,
+  mapa: null, cerrados: [], ultimoCerrado: null, informe: null, manual: { email: '', paso: null },
+  f: { email: '', clave: '', nombre: '', horaManual: '', fase: 'alerta', nivel: 'local', desc: '', hora: '', lugarQ: '', lugar: null,
        nEmail: '', nNombre: '', nCargo: 'Operador de Rescate', nRol: 'rescatista', nCordada: '' },
   msg: '', err: '', ocupado: false
 };
@@ -264,15 +264,39 @@ function evento(b, id, tipo, fase, detalle) {
   });
 }
 
-async function guardarRespuesta({ estado, hasta = null }) {
+// Clave del integrante en el resumen de Gerencia (derivada del correo, sin símbolos).
+const claveResumen = (email) => String(email).toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+// Guarda la disponibilidad. Sin "para", la del propio usuario; con "para" (ficha de la nómina),
+// es un ingreso manual del Líder o Administrador en nombre de ese integrante.
+async function guardarRespuesta({ estado, hasta = null, para = null }) {
   const id = S.llamado.id;
+  const quien = para || { email: S.email, nombre: S.perfil.nombre, cordada: S.perfil.cordada };
   const b = writeBatch(db);
   const hastaTs = hasta ? Timestamp.fromDate(hasta) : null;
-  b.set(doc(db, 'llamados', id, 'respuestas', S.email), { estado, hasta: hastaTs, eta: null, en: serverTimestamp() });
-  b.update(doc(db, 'llamados', id, 'resumen', 'actual'), { ['r.' + auth.currentUser.uid]: { e: estado, h: hastaTs, t: null, c: S.perfil.cordada || null, n: S.perfil.nombre } });
-  evento(b, id, 'respuesta', S.llamado.fase, estado === 'no' ? 'NO DISPONIBLE' : 'DISPONIBLE ' + (hasta ? 'hasta ' + cuando(hasta) : 'hasta nuevo aviso'));
+  const texto = estado === 'no' ? 'NO DISPONIBLE' : 'DISPONIBLE ' + (hasta ? 'hasta ' + cuando(hasta) : 'hasta nuevo aviso');
+  b.set(doc(db, 'llamados', id, 'respuestas', quien.email), { estado, hasta: hastaTs, eta: null, en: serverTimestamp() });
+  b.update(doc(db, 'llamados', id, 'resumen', 'actual'), { ['r.' + claveResumen(quien.email)]: { e: estado, h: hastaTs, t: null, c: quien.cordada || null, n: quien.nombre } });
+  if (para) evento(b, id, 'manual', S.llamado.fase, `${quien.nombre}: ${texto}`);
+  else evento(b, id, 'respuesta', S.llamado.fase, texto);
   await b.commit();
   S.paso = null;
+  if (para) { S.msg = `Disponibilidad de ${nombreCorto(quien.nombre)} registrada: ${texto}.`; S.manual = { email: '', paso: null }; }
+}
+
+function fichaManual() {
+  const n = integrantes().find((x) => x.email === S.manual.email);
+  if (!n) throw new Error('Elige un integrante.');
+  return { email: n.email, nombre: n.nombre, cordada: n.cordada || null };
+}
+
+// Hora exacta elegida en un campo "HH:MM" (si ya pasó hoy, es mañana).
+function horaDesde(valor) {
+  if (!valor) throw new Error('Elige una hora.');
+  const [hh, mm] = valor.split(':').map(Number);
+  const d = new Date(); d.setHours(hh, mm, 0, 0);
+  if (d.getTime() <= Date.now()) d.setTime(d.getTime() + 24 * H);
+  return d;
 }
 
 function mensajeLlamado(l) {
@@ -299,7 +323,7 @@ async function abrirLlamado() {
   evento(b, ref.id, 'apertura', S.f.fase, `Nivel ${NIVELES[S.f.nivel]} · ${lugar.nombre} · ${desc}`);
   await b.commit();
   S.f.desc = ''; S.f.lugar = null; S.f.lugarQ = ''; S.lugares = []; S.tab = 'tablero';
-  S.msg = 'Llamado abierto. Compártelo ahora en el grupo de WhatsApp.';
+  S.msg = 'Fase reportada. Compártela ahora en el grupo de WhatsApp.';
   abrirWhatsApp(mensajeLlamado({ ...datos, creadoEn: ahora }));
 }
 
@@ -313,7 +337,6 @@ async function cambiarFase(fase) {
   b.update(doc(db, 'llamados', l.id), cambios);
   evento(b, l.id, 'fase', fase, `De ${FASES[l.fase]} a ${FASES[fase]}`);
   await b.commit();
-  S.msg = `Fase cambiada a ${FASES[fase]}. Avisa por radio 5-1 y WhatsApp.`;
   abrirWhatsApp(mensajeLlamado({ ...l, fase }));
 }
 
@@ -442,9 +465,9 @@ function encabezado() {
 }
 
 function tabsDisponibles() {
-  if (esAdmin()) return [{ id: 'tablero', txt: 'Tablero' }, { id: 'nomina', txt: 'Nómina' }];
+  if (esAdmin()) return [{ id: 'tablero', txt: 'Panel' }, { id: 'nomina', txt: 'Nómina' }];
   const t = [{ id: 'estado', txt: 'Mi estado' }];
-  if (esLider()) t.push({ id: 'tablero', txt: 'Tablero' }, { id: 'nomina', txt: 'Nómina' });
+  if (esLider()) t.push({ id: 'tablero', txt: 'Panel' }, { id: 'nomina', txt: 'Nómina' });
   else if (esGerencia()) t.push({ id: 'resumen', txt: 'Resumen' });
   return t;
 }
@@ -596,7 +619,7 @@ function vistaEstado() {
     return `<main>
       ${ficha()}
       ${avisos()}
-      ${esLider() ? '<button class="principal" data-act="tab" data-v="abrir">ABRIR LLAMADO</button>' : ''}
+      ${esLider() ? '<button class="principal" data-act="tab" data-v="abrir">REPORTAR FASE</button>' : ''}
       <div class="hueco"></div>
     </main>`;
   }
@@ -653,7 +676,7 @@ function vistaAbrir() {
     `<button data-act="set" data-k="${campo}" data-v="${k}" class="${S.f[campo] === k ? 'on' : ''} ${clase ? clase + k : ''}" aria-pressed="${S.f[campo] === k}">${v}</button>`).join('')}</div>`;
   const plazo = S.f.nivel === 'sno' && S.f.fase === 'alerta';
   return `<main>
-    <h3>Nuevo llamado</h3>
+    <h3>Reportar fase</h3>
     <div><label>Fase</label>${seg('fase', FASES_APERTURA, 'f-')}</div>
     <div><label>Nivel</label>${seg('nivel', NIVELES)}</div>
     <div class="campo"><label for="desc">Descripción breve</label>
@@ -667,7 +690,7 @@ function vistaAbrir() {
     <p class="suave">Activación Local: clima de 24 h. Regional o SNO: clima de 5 días.</p>
     ${plazo ? `<p class="suave">Se marcará el plazo de ${PLAZO_SNO_H} h para reportar disponibilidad al SNO.</p>` : ''}
     ${avisos()}
-    <button class="principal" data-act="abrirLlamado" ${S.ocupado ? 'disabled' : ''}>ABRIR LLAMADO</button>
+    <button class="principal" data-act="abrirLlamado" ${S.ocupado ? 'disabled' : ''}>REPORTAR FASE</button>
     <button class="enlace" data-act="tab" data-v="tablero">Cancelar</button>
   </main>`;
 }
@@ -727,7 +750,7 @@ function vistaInicioLider() {
   const filas = listaInformes();
   return `<main>
     ${avisos()}
-    <button class="principal" data-act="tab" data-v="abrir">ABRIR LLAMADO</button>
+    <button class="principal" data-act="tab" data-v="abrir">REPORTAR FASE</button>
     ${S.cerrados.length ? `<h3>Informes de llamados</h3><ul class="lista informes">${filas}</ul>` : ''}
   </main>`;
 }
@@ -755,6 +778,7 @@ function vistaTablero() {
   const otrasFases = Object.keys(FASES).filter((f) => f !== l.fase);
   return `${banda(l)}<main>
     ${avisos()}
+    ${ingresoManual(filas)}
     <div class="tres">
       <div class="cont si"><b>${k.si}</b><span>Disponibles</span></div>
       <div class="cont no"><b>${k.no}</b><span>No disponibles</span></div>
@@ -767,16 +791,54 @@ function vistaTablero() {
     <div class="filtros" role="group" aria-label="Filtro">${fil('todos', 'Todos ' + filas.length)}${fil('si', 'Disp.')}${fil('no', 'No disp.')}${fil('sr', 'Sin resp.')}</div>
     <ul class="lista">${lista.map((f) => `<li>
       <div class="con-foto">${avatar(f.email, f.nombre, 36)}<div><div class="nom">${esc(nombreCorto(f.nombre))}</div><small>${esc(f.cordada ? CAT_NOMBRE[f.cordada] || f.cargo : f.cargo)}</small></div></div>
-      <div class="der"><span class="pill ${PILL[f.c][0]}">${PILL[f.c][1]}</span><small>${esc(detalle(f))}</small></div>
+      <div class="der"><span class="pill ${PILL[f.c][0]}">${PILL[f.c][1]}</span><small>${esc(detalle(f))}</small>
+        <button class="editar" data-act="manualPara" data-v="${esc(f.email)}" aria-label="Ingresar o editar disponibilidad de ${esc(f.nombre)}">EDITAR</button></div>
     </li>`).join('') || '<li><span class="suave">Nadie en este filtro.</span></li>'}</ul>
     <button class="contorno" data-act="compartir">COMPARTIR LLAMADO (WHATSAPP)</button>
-    ${sinResp.length ? `<button class="contorno" data-act="recordar">RECORDAR A LOS ${sinResp.length} SIN RESPUESTA</button>` : ''}
+    ${sinResp.length ? `<button class="contorno" data-act="recordar">RECORDAR A SIN RESPUESTA (${sinResp.length})</button>` : ''}
     ${terreno(l)}
     <label>Cambiar fase</label>
     <div class="dos">${otrasFases.map((f) => `<button class="${f === 'movilizacion' ? 'peligro' : 'neutro'}" data-act="fase" data-v="${f}" ${S.ocupado ? 'disabled' : ''}>PASAR A ${FASES[f]}</button>`).join('')}</div>
     <button class="${l.fase === 'desmovilizacion' ? 'principal' : 'neutro'}" data-act="cerrar" ${S.ocupado ? 'disabled' : ''}>CERRAR LLAMADO</button>
     <button class="contorno" data-act="informe" data-v="${l.id}">GENERAR INFORME (A LA FECHA)</button>
   </main>`;
+}
+
+// Ingreso manual (Líder/Administrador): las mismas opciones que tiene cada operador.
+function ingresoManual(filas) {
+  const M = S.manual;
+  const sel = filas.find((f) => f.email === M.email);
+  const opciones = `<option value="">Elegir integrante…</option>${filas.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
+    .map((f) => `<option value="${esc(f.email)}" ${f.email === M.email ? 'selected' : ''}>${esc(f.nombre)}</option>`).join('')}`;
+  let cuerpo = '';
+  if (sel) {
+    const r = sel.r; const h = r && aFecha(r.hasta);
+    const actual = !r ? 'Sin respuesta' : sel.c === 'no' ? 'No disponible'
+      : sel.c === 'vencida' ? 'Disponibilidad vencida' : 'Disponible ' + (h ? 'hasta ' + cuando(h) : 'hasta nuevo aviso');
+    if (M.paso === 'tiempo') {
+      cuerpo = `<p class="suave">¿Hasta cuándo está disponible ${esc(nombreCorto(sel.nombre))}?</p>
+        <div class="opciones">
+          <button class="opcion" data-act="mHoras" data-v="2">2 h</button>
+          <button class="opcion" data-act="mHoras" data-v="4">4 h</button>
+          <button class="opcion" data-act="mHoras" data-v="8">8 h</button>
+          <button class="opcion" data-act="mHoras" data-v="24">24 h</button>
+          <button class="opcion ancha" data-act="mHoras" data-v="0">HASTA NUEVO AVISO</button>
+        </div>
+        <div class="fila-input"><label for="horaManual" class="oculto">Hora exacta</label><input id="horaManual" type="time" data-bind="horaManual" value="${esc(S.f.horaManual)}">
+          <button class="neutro" style="width:auto;padding:0 16px" data-act="mHoraExacta" ${S.ocupado ? 'disabled' : ''}>HASTA ESA HORA</button></div>
+        <button class="enlace" data-act="mPaso" data-v="">Volver</button>`;
+    } else {
+      cuerpo = `<p class="suave">Estado actual: <b>${esc(actual)}</b></p>
+        <div class="dos"><button class="si grande-btn" data-act="mPaso" data-v="tiempo">DISPONIBLE</button>
+          <button class="no grande-btn" data-act="mNo" ${S.ocupado ? 'disabled' : ''}>NO DISPONIBLE</button></div>`;
+    }
+  }
+  return `<details class="manual" ${M.email ? 'open' : ''}>
+    <summary>INGRESO MANUAL DE DISPONIBILIDAD</summary>
+    <p class="suave">Para integrantes que avisaron su disponibilidad al Líder y no pueden reportarla en la app. Queda registrado en la bitácora.</p>
+    <div class="campo"><label for="manualPara">Integrante</label><select id="manualPara" data-act-change="manualPara">${opciones}</select></div>
+    ${cuerpo}
+  </details>`;
 }
 
 // --- Resumen (Gerencia): solo totales ---
@@ -857,6 +919,7 @@ function describirEvento(e) {
     case 'apertura': return `<b>Apertura en FASE DE ${esc(FASES[e.fase] || e.fase)}</b> por ${quien}. ${esc(e.detalle)}`;
     case 'fase': return `<b>Cambio de fase</b> (${esc(e.detalle)}) por ${quien}`;
     case 'respuesta': return `${quien}: <b>${esc(e.detalle)}</b>`;
+    case 'manual': return `<b>Ingreso manual</b> por ${quien} · ${esc(e.detalle)}`;
     case 'mapa': return `${esc(e.detalle)} por ${quien}`;
     case 'cierre': return `<b>${esc(e.detalle)}</b> por ${quien}`;
     default: return `${esc(e.detalle)} · ${quien}`;
@@ -876,7 +939,7 @@ function vistaInforme() {
   if (!hitos.length && ini) hitos.push({ fase: l.fase, en: ini });
   const fases = hitos.map((h, i) => {
     const hasta = i + 1 < hitos.length ? hitos[i + 1].en : (fin || new Date(corte));
-    return `<tr><td>${esc(FASES[h.fase] || h.fase)}</td><td>${fecha(h.en)}</td><td>${hasta && h.en ? dur(hasta - h.en) : '—'}</td></tr>`;
+    return `<tr><td>${esc(FASES[h.fase] || h.fase)}</td><td>${fecha(h.en)}</td><td>${hasta && hasta !== fin && i + 1 < hitos.length ? fecha(hasta) : (fin ? fecha(fin) : 'En curso')}</td></tr>`;
   }).join('');
   // Disponibilidad al cierre.
   const filas = integrantes().map((n) => ({ ...n, r: I.respuestas[n.email], c: clasificar(I.respuestas[n.email], corte) }));
@@ -908,10 +971,9 @@ function vistaInforme() {
         <tr><th>Lugar</th><td>${l.lugar ? `${esc(l.lugar.nombre)} (${Number(l.lugar.lat).toFixed(4)}, ${Number(l.lugar.lon).toFixed(4)})` : '—'}</td></tr>
         <tr><th>Apertura</th><td>${fecha(ini)} · ${esc(nombreDe(l.creadoPor))}</td></tr>
         <tr><th>Cierre</th><td>${fin ? fecha(fin) + ' · ' + esc(nombreDe(l.cerradoPor)) : 'En curso · FASE DE ' + esc(FASES[l.fase] || l.fase)}</td></tr>
-        <tr><th>Duración${fin ? ' total' : ' a la fecha'}</th><td>${ini ? dur((fin ? fin.getTime() : corte) - ini) : '—'}</td></tr>
       </table>
       <h2>Fases</h2>
-      <table><tr><th>Fase</th><th>Inicio</th><th>Duración</th></tr>${fases}</table>
+      <table><tr><th>Fase</th><th>Inicio</th><th>Término</th></tr>${fases}</table>
       <h2>Disponibilidad ${fin ? 'al cierre' : 'al momento del informe'}</h2>
       <p>Disponibles: <b>${k.si}</b> · No disponibles: <b>${k.no}</b> · Sin respuesta o vencida: <b>${k.sr}</b> · Total integrantes: <b>${filas.length}</b></p>
       <table><tr><th>Integrante</th><th>Perfil de cordada</th><th>Estado</th><th>Resp.</th></tr>${tablaPersonal}</table>
@@ -971,6 +1033,7 @@ $app.addEventListener('change', (e) => {
     const email = t.dataset.email;
     accion(() => updateDoc(doc(db, 'nomina', email), { rol: t.value }));
   }
+  if (t.dataset.actChange === 'manualPara') { S.manual = { email: t.value, paso: null }; S.err = ''; S.msg = ''; t.blur(); render(); }
   if (t.dataset.actChange === 'cordada') {
     const email = t.dataset.email;
     accion(() => updateDoc(doc(db, 'nomina', email), { cordada: t.value || null }));
@@ -1022,13 +1085,12 @@ $app.addEventListener('click', (e) => {
       const h = Number(v);
       await guardarRespuesta({ estado: 'si', hasta: h ? new Date(Date.now() + h * H) : null });
     }); break;
-    case 'horaExacta': accion(async () => {
-      if (!S.f.hora) throw new Error('Elige una hora.');
-      const [hh, mm] = S.f.hora.split(':').map(Number);
-      const d = new Date(); d.setHours(hh, mm, 0, 0);
-      if (d.getTime() <= Date.now()) d.setTime(d.getTime() + 24 * H);
-      await guardarRespuesta({ estado: 'si', hasta: d });
-    }); break;
+    case 'horaExacta': accion(() => guardarRespuesta({ estado: 'si', hasta: horaDesde(S.f.hora) })); break;
+    case 'manualPara': S.manual = { email: v, paso: null }; S.err = ''; S.msg = ''; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); break;
+    case 'mPaso': S.manual.paso = v || null; render(); break;
+    case 'mNo': accion(() => guardarRespuesta({ estado: 'no', para: fichaManual() })); break;
+    case 'mHoras': accion(() => { const h = Number(v); return guardarRespuesta({ estado: 'si', hasta: h ? new Date(Date.now() + h * H) : null, para: fichaManual() }); }); break;
+    case 'mHoraExacta': accion(() => guardarRespuesta({ estado: 'si', hasta: horaDesde(S.f.horaManual), para: fichaManual() })); break;
     case 'informe': accion(async () => {
       try { await cargarInforme(v); } catch (err) { S.informe = null; S.tab = S.tabPrevio || 'estado'; throw err; }
     }); break;

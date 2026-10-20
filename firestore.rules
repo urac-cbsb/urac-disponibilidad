@@ -17,6 +17,8 @@ service cloud.firestore {
 
     function miCordada() { return get(perfilPath()).data.get('cordada', null); }
     function miNombre() { return get(perfilPath()).data.nombre; }
+    // Clave de cada integrante en el resumen de Gerencia: su correo sin símbolos.
+    function miClave() { return myEmail().replace('[^a-z0-9]', '_'); }
     // Pueden sacar el informe: Líder, Administrador, Jefe de Operaciones y Jefe de Planificación.
     function informe() { return lider() || (member() && get(perfilPath()).data.cargo in ['Jefe de Operaciones', 'Jefe de Planificación']); }
     function nominaValida(d) {
@@ -84,7 +86,7 @@ service cloud.firestore {
           && request.resource.data.en == request.time
           && request.resource.data.detalle is string && request.resource.data.detalle.size() <= 500
           && ((request.resource.data.tipo == 'respuesta' && abierto())
-              || (lider() && request.resource.data.tipo in ['apertura', 'fase', 'mapa', 'cierre']));
+              || (lider() && request.resource.data.tipo in ['apertura', 'fase', 'mapa', 'cierre', 'manual']));
         allow update: if false;
         allow delete: if lider() && !abierto();
       }
@@ -103,7 +105,9 @@ service cloud.firestore {
       // Respuesta de cada integrante: solo él la escribe; solo él y el Líder la leen.
       match /respuestas/{email} {
         allow read: if informe() || (member() && email == myEmail());
-        allow create, update: if member() && email == myEmail() && abierto()
+        // La escribe el propio integrante o, como ingreso manual, el Líder o el Administrador.
+        allow create, update: if member() && abierto()
+          && (email == myEmail() || (lider() && exists(/databases/$(db)/documents/nomina/$(email))))
           && request.resource.data.keys().hasOnly(['estado', 'hasta', 'eta', 'en'])
           && request.resource.data.estado in ['si', 'no']
           && (request.resource.data.hasta == null || request.resource.data.hasta is timestamp)
@@ -112,17 +116,20 @@ service cloud.firestore {
         allow delete: if lider() && !abierto();
       }
 
-      // Resumen para Gerencia: estado, perfil de cordada y nombre de cada integrante, sin correos.
+      // Resumen para Gerencia: estado, perfil de cordada y nombre de cada integrante.
       match /resumen/{doc} {
         allow read: if gerencia();
         allow create: if lider() && request.resource.data.keys().hasOnly(['r']);
         allow update: if member() && abierto()
           && request.resource.data.keys().hasOnly(['r'])
-          && request.resource.data.r.diff(resource.data.r).affectedKeys().hasOnly([request.auth.uid])
-          && request.resource.data.r[request.auth.uid].keys().hasOnly(['e', 'h', 't', 'c', 'n'])
-          && request.resource.data.r[request.auth.uid].get('c', null) == miCordada()
-          && request.resource.data.r[request.auth.uid].get('n', miNombre()) == miNombre()
-          && request.resource.data.r[request.auth.uid].e in ['si', 'no'];
+          && request.resource.data.r.diff(resource.data.r).affectedKeys().size() == 1
+          && (lider() || (
+               request.resource.data.r.diff(resource.data.r).affectedKeys().hasOnly([miClave()])
+               && request.resource.data.r[miClave()].get('c', null) == miCordada()
+               && request.resource.data.r[miClave()].keys().hasOnly(['e', 'h', 't', 'c', 'n'])
+               && request.resource.data.r[miClave()].e in ['si', 'no']
+               && request.resource.data.r[miClave()].get('c', null) == miCordada()
+               && request.resource.data.r[miClave()].get('n', '') == miNombre()));
         allow delete: if lider() && !abierto();
       }
     }

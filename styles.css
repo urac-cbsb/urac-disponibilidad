@@ -224,3 +224,14 @@ ul.informes li.destacado { background: var(--panel); padding: 10px; border: 1px 
 /* Acciones de informes */
 .acciones-inf { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
 .eliminar { min-height: 40px; padding: 0 12px; background: transparent; border: 1px solid #FF8A80; color: #FF8A80; font-family: var(--display); font-weight: 700; font-size: 15px; }
+
+/* Ingreso manual (Líder/Administrador) */
+details.manual { border: 2px solid var(--amarillo); padding: 0 12px; }
+details.manual[open] { padding-bottom: 12px; }
+details.manual > summary { min-height: 52px; display: flex; align-items: center; font-family: var(--display); font-weight: 700; font-size: 20px; color: var(--amarillo); cursor: pointer; list-style: none; }
+details.manual > summary::-webkit-details-marker { display: none; }
+details.manual > summary::after { content: '+'; margin-left: auto; font-size: 26px; }
+details.manual[open] > summary::after { content: '–'; }
+details.manual > * + * { margin-top: 10px; }
+.grande-btn { min-height: 64px; border: none; color: var(--blanco); font-family: var(--display); font-weight: 700; font-size: 22px; width: 100%; }
+.editar { min-height: 36px; margin-top: 4px; padding: 0 10px; background: transparent; border: 1px solid var(--borde); color: var(--amarillo); font-size: 12px; font-weight: 700; }
