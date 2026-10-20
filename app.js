@@ -901,6 +901,10 @@ function vistaNomina() {
       <div class="m-top">${avatar(n.email, n.nombre, 52)}
         <div><div class="nom" style="${n.activo ? '' : 'color: var(--texto-suave); text-decoration: line-through'}">${esc(n.nombre)}</div><small>${esc(n.cargo)} · ${esc(n.email)}</small></div></div>
       <div class="dos">
+        <div class="campo"><label for="car-${i}">Cargo</label><select id="car-${i}" data-act-change="cargo" data-email="${esc(n.email)}">${(CARGOS.includes(n.cargo) ? CARGOS : [n.cargo, ...CARGOS]).map((c) => `<option ${n.cargo === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+        <button class="neutro" style="align-self:end" data-act="editarNombre" data-email="${esc(n.email)}">EDITAR NOMBRE</button>
+      </div>
+      <div class="dos">
         <div class="campo"><label for="rol-${i}">Perfil en la app</label><select id="rol-${i}" data-act-change="rol" data-email="${esc(n.email)}">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${n.rol === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
         ${n.rol === 'admin' ? '<p class="suave">Administrador del sistema: no integra la URAC ni cuenta en cordadas.</p>'
           : `<div class="campo"><label for="cor-${i}">Perfil de cordada</label><select id="cor-${i}" data-act-change="cordada" data-email="${esc(n.email)}">${opcCordada(n.cordada || '')}</select></div>`}
@@ -1034,6 +1038,10 @@ $app.addEventListener('change', (e) => {
     accion(() => updateDoc(doc(db, 'nomina', email), { rol: t.value }));
   }
   if (t.dataset.actChange === 'manualPara') { S.manual = { email: t.value, paso: null }; S.err = ''; S.msg = ''; t.blur(); render(); }
+  if (t.dataset.actChange === 'cargo') {
+    const email = t.dataset.email;
+    accion(async () => { await updateDoc(doc(db, 'nomina', email), { cargo: t.value }); S.msg = 'Cargo actualizado.'; });
+  }
   if (t.dataset.actChange === 'cordada') {
     const email = t.dataset.email;
     accion(() => updateDoc(doc(db, 'nomina', email), { cordada: t.value || null }));
@@ -1113,6 +1121,16 @@ $app.addEventListener('click', (e) => {
       if (!S.lugares.length) S.err = 'No se encontró ese lugar. Prueba con otro nombre o la comuna.';
     }); break;
     case 'elegirLugar': S.f.lugar = S.lugares[Number(v)]; S.lugares = []; S.f.lugarQ = ''; render(); break;
+    case 'editarNombre': {
+      const n = S.nomina.find((x) => x.email === b.dataset.email);
+      if (!n) break;
+      const nuevo = (prompt('Nombre completo del integrante:', n.nombre) || '').trim();
+      if (nuevo && nuevo !== n.nombre) {
+        if (nuevo.length < 2 || nuevo.length > 100) { S.err = 'El nombre debe tener entre 2 y 100 caracteres.'; render(); break; }
+        accion(async () => { await updateDoc(doc(db, 'nomina', n.email), { nombre: nuevo }); S.msg = 'Nombre actualizado.'; });
+      }
+      break;
+    }
     case 'activo': {
       const n = S.nomina.find((x) => x.email === b.dataset.email);
       if (n) accion(() => updateDoc(doc(db, 'nomina', n.email), { activo: !n.activo }));
