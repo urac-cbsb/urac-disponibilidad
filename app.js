@@ -7,10 +7,11 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   getFirestore, doc, getDoc, collection, query, where, onSnapshot, writeBatch,
-  serverTimestamp, Timestamp, updateDoc
+  serverTimestamp, Timestamp, updateDoc, setDoc
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from './config.js';
-import { NOMBRES, CARGOS, SUGERIDO } from './nomina.js';
+import { NOMBRES, CARGOS, SUGERIDO, CATEGORIAS, CATEGORIA_LIBRE } from './nomina.js';
+import { SAN_BERNARDO, obtenerPronostico, buscarLugares, proximas24, proximos5 } from './clima.js';
 
 // ---------- Constantes ----------
 const TZ = 'America/Santiago';
@@ -21,7 +22,9 @@ const FASES = { monitoreo: 'MONITOREO', alerta: 'ALERTA', movilizacion: 'MOVILIZ
 const NIVELES = { local: 'Local', regional: 'Regional', sno: 'SNO' };
 const ROLES = { rescatista: 'Rescatista', gerencia: 'Gerencia', lider: 'Líder', admin: 'Administrador' };
 const H = 3600 * 1000;
-const ESCUDO = '<svg width="30" height="34" viewBox="0 0 30 34" aria-hidden="true"><path d="M3 3h24v16c0 7-6 11-12 13C9 30 3 26 3 19z" fill="#0E0E0E" stroke="#F5C400" stroke-width="2.5"/><path d="M9 10l12 14M21 10L9 24" stroke="#F5C400" stroke-width="2.5" stroke-linecap="round"/></svg>';
+const ESCUDO = '<img src="logo.png" alt="Escudo URAC" width="36" height="46" style="display:block">';
+const CAT_NOMBRE = Object.fromEntries(CATEGORIAS.map((c) => [c.id, c.nombre]));
+const NOMBRES_CORDADA = ['Alfa', 'Bravo', 'Charlie', 'Delta'];
 const CHECK = '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6" fill="none" stroke="#3CCB6B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const EQUIS = '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="#FF8A80" stroke-width="3" stroke-linecap="round"/></svg>';
 
@@ -32,14 +35,15 @@ const configurado = !String(firebaseConfig.apiKey).startsWith('PEGAR');
 const S = {
   cargando: true, user: null, email: '', perfil: null, sinNomina: false, bootstrapLibre: false,
   tab: 'estado', paso: null, filtro: 'todos',
-  llamado: null, miResp: null, respuestas: {}, nomina: [], resumen: null,
-  f: { email: '', clave: '', nombre: '', fase: 'alerta', nivel: 'local', desc: '', hora: '',
-       nEmail: '', nNombre: '', nCargo: 'Operador de Rescate', nRol: 'rescatista' },
+  llamado: null, miResp: null, respuestas: {}, nomina: [], resumen: null, fotos: {},
+  clima: { clave: '', datos: null, err: '', cargando: false, en: 0 }, lugares: [],
+  f: { email: '', clave: '', nombre: '', fase: 'alerta', nivel: 'local', desc: '', hora: '', lugarQ: '', lugar: null,
+       nEmail: '', nNombre: '', nCargo: 'Operador de Rescate', nRol: 'rescatista', nCordada: '' },
   msg: '', err: '', ocupado: false
 };
 
 let app, auth, db;
-let subs = { perfil: null, llamados: null, miResp: null, respuestas: null, resumen: null, nomina: null };
+let subs = { perfil: null, miFoto: null, llamados: null, miResp: null, respuestas: null, resumen: null, nomina: null, fotos: null };
 let llamadoId = null;
 
 const esLider = () => S.perfil && ['lider', 'admin'].includes(S.perfil.rol);
@@ -106,27 +110,31 @@ function cortarTodo() { Object.keys(subs).forEach(cortar); llamadoId = null; }
 
 function iniciarSesion() {
   cortarTodo();
-  S.perfil = null; S.sinNomina = false; S.llamado = null; S.miResp = null; S.respuestas = {}; S.nomina = []; S.resumen = null;
+  S.perfil = null; S.sinNomina = false; S.llamado = null; S.miResp = null; S.respuestas = {}; S.nomina = []; S.resumen = null; S.fotos = {};
   let rolActual = null;
+  subs.miFoto = onSnapshot(doc(db, 'fotos', S.email), (s) => {
+    if (s.exists()) S.fotos[S.email] = s.data().img; else delete S.fotos[S.email];
+    render();
+  }, () => {});
   subs.perfil = onSnapshot(doc(db, 'nomina', S.email), async (snap) => {
     S.cargando = false;
     if (!snap.exists()) {
       S.perfil = null; S.sinNomina = true;
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos'].forEach(cortar); llamadoId = null;
       try { S.bootstrapLibre = !(await getDoc(doc(db, 'config', 'inicial'))).exists(); } catch (e) { S.bootstrapLibre = false; }
       return render();
     }
     S.sinNomina = false;
     S.perfil = snap.data();
     if (!S.perfil.activo) {
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos'].forEach(cortar); llamadoId = null;
       return render();
     }
     if (rolActual !== S.perfil.rol || !subs.llamados) {
       rolActual = S.perfil.rol;
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos'].forEach(cortar); llamadoId = null;
       escucharLlamados();
-      if (esLider()) escucharNomina();
+      if (esLider()) { escucharNomina(); escucharFotos(); }
       if (S.tab !== 'estado' && !tabsDisponibles().some((t) => t.id === S.tab)) S.tab = 'estado';
     }
     render();
@@ -173,6 +181,53 @@ function escucharNomina() {
   }, () => {});
 }
 
+function escucharFotos() {
+  subs.fotos = onSnapshot(collection(db, 'fotos'), (qs) => {
+    const m = {}; qs.forEach((d) => { m[d.id] = d.data().img; });
+    S.fotos = m; render();
+  }, () => {});
+}
+
+// ---------- Clima ----------
+function lugarClima() {
+  const l = S.llamado;
+  return (l && l.lugar && typeof l.lugar.lat === 'number') ? l.lugar : SAN_BERNARDO;
+}
+function asegurarClima() {
+  const lugar = lugarClima();
+  const clave = `${lugar.lat},${lugar.lon}`;
+  const c = S.clima;
+  if (c.cargando) return;
+  if (c.clave === clave && (c.datos || c.err) && Date.now() - c.en < 30 * 60000) return;
+  S.clima = { clave, datos: c.clave === clave ? c.datos : null, err: '', cargando: true, en: c.en };
+  obtenerPronostico(lugar)
+    .then((d) => { S.clima = { clave, datos: d, err: '', cargando: false, en: Date.now() }; })
+    .catch(() => { S.clima = { clave, datos: null, err: 'No se pudo cargar el pronóstico. Revisa tu conexión.', cargando: false, en: Date.now() }; })
+    .finally(render);
+}
+
+// ---------- Cordadas ----------
+// Arma cordadas con los disponibles, en orden de respuesta: cada puesto se llena con quien tenga
+// ese perfil; el puesto libre ("Apoyo"), con quien quede. Si una cordada queda incompleta, no se arma otra.
+function armarCordadas(disponibles) {
+  const pool = disponibles.slice();
+  const cordadas = [];
+  while (pool.length && cordadas.length < NOMBRES_CORDADA.length) {
+    const puestos = CATEGORIAS.map((c) => ({ cat: c, p: null }));
+    puestos.forEach((pu) => {
+      const i = pool.findIndex((x) => x.cat === pu.cat.id);
+      if (i >= 0) pu.p = pool.splice(i, 1)[0];
+    });
+    const libre = puestos.find((pu) => pu.cat.id === CATEGORIA_LIBRE);
+    if (libre && !libre.p && pool.length) libre.p = pool.shift();
+    if (puestos.every((pu) => !pu.p)) break;
+    const completa = puestos.every((pu) => pu.p);
+    cordadas.push({ nombre: NOMBRES_CORDADA[cordadas.length], puestos, completa });
+    if (!completa) break;
+  }
+  return { cordadas, reserva: pool };
+}
+
 // ---------- Acciones ----------
 async function accion(fn) {
   if (S.ocupado) return;
@@ -187,7 +242,7 @@ async function guardarRespuesta({ estado, hasta = null, eta = null }) {
   const hastaTs = hasta ? Timestamp.fromDate(hasta) : null;
   const etaTs = eta ? Timestamp.fromDate(eta) : null;
   b.set(doc(db, 'llamados', id, 'respuestas', S.email), { estado, hasta: hastaTs, eta: etaTs, en: serverTimestamp() });
-  b.update(doc(db, 'llamados', id, 'resumen', 'actual'), { ['r.' + auth.currentUser.uid]: { e: estado, h: hastaTs, t: etaTs } });
+  b.update(doc(db, 'llamados', id, 'resumen', 'actual'), { ['r.' + auth.currentUser.uid]: { e: estado, h: hastaTs, t: etaTs, c: S.perfil.cordada || null } });
   await b.commit();
   S.paso = null;
 }
@@ -206,12 +261,14 @@ async function abrirLlamado() {
   if (S.llamado) b.update(doc(db, 'llamados', S.llamado.id), { abierto: false, cerradoEn: serverTimestamp(), cerradoPor: S.email });
   const ref = doc(collection(db, 'llamados'));
   const plazo = (S.f.nivel === 'sno' && S.f.fase === 'alerta') ? Timestamp.fromDate(new Date(ahora.getTime() + PLAZO_SNO_H * H)) : null;
+  const lugar = S.f.lugar || SAN_BERNARDO;
   const datos = { abierto: true, fase: S.f.fase, nivel: S.f.nivel, descripcion: desc, total,
+    lugar: { nombre: lugar.nombre, lat: lugar.lat, lon: lugar.lon },
     plazoSNO: plazo, creadoEn: serverTimestamp(), creadoPor: S.email };
   b.set(ref, datos);
   b.set(doc(db, 'llamados', ref.id, 'resumen', 'actual'), { r: {} });
   await b.commit();
-  S.f.desc = ''; S.tab = 'tablero';
+  S.f.desc = ''; S.f.lugar = null; S.f.lugarQ = ''; S.lugares = []; S.tab = 'tablero';
   S.msg = 'Llamado abierto. Compártelo ahora en el grupo de WhatsApp.';
   abrirWhatsApp(mensajeLlamado({ ...datos, creadoEn: ahora }));
 }
@@ -239,10 +296,24 @@ async function guardarIntegrante() {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { S.err = 'Escribe un correo válido.'; return; }
   if (!nombre) { S.err = 'Escribe el nombre.'; return; }
   const b = writeBatch(db);
-  b.set(doc(db, 'nomina', email), { nombre, cargo: S.f.nCargo, rol: S.f.nRol, activo: true });
+  b.set(doc(db, 'nomina', email), { nombre, cargo: S.f.nCargo, rol: S.f.nRol, cordada: S.f.nCordada || null, activo: true });
   await b.commit();
   S.msg = `${nombre} agregado. Debe crear su cuenta en la app con ${email}.`;
-  S.f.nEmail = ''; S.f.nNombre = ''; S.f.nCargo = 'Operador de Rescate'; S.f.nRol = 'rescatista';
+  S.f.nEmail = ''; S.f.nNombre = ''; S.f.nCargo = 'Operador de Rescate'; S.f.nRol = 'rescatista'; S.f.nCordada = '';
+}
+
+// Reduce la foto a 240×240 (recorte centrado) para guardarla liviana en la base de datos.
+async function subirFoto(email, archivo) {
+  if (!archivo) return;
+  if (!archivo.type.startsWith('image/')) throw new Error('El archivo debe ser una imagen.');
+  const bmp = await createImageBitmap(archivo);
+  const lado = Math.min(bmp.width, bmp.height);
+  const c = document.createElement('canvas'); c.width = 240; c.height = 240;
+  c.getContext('2d').drawImage(bmp, (bmp.width - lado) / 2, (bmp.height - lado) / 2, lado, lado, 0, 0, 240, 240);
+  let url = c.toDataURL('image/jpeg', 0.8);
+  if (url.length > 150000) url = c.toDataURL('image/jpeg', 0.6);
+  await setDoc(doc(db, 'fotos', email), { img: url });
+  S.msg = 'Foto guardada.';
 }
 
 async function configurarAdmin() {
@@ -255,10 +326,17 @@ async function configurarAdmin() {
 }
 
 // ---------- Vistas ----------
+function iniciales(n) { return String(n || '?').split(' ').filter(Boolean).slice(0, 2).map((x) => x[0]).join('').toUpperCase(); }
+function avatar(email, nombre, px) {
+  const src = S.fotos[email];
+  const st = `width:${px}px;height:${px}px`;
+  return src ? `<img class="foto" src="${esc(src)}" alt="" style="${st}">`
+    : `<span class="foto ini" style="${st};font-size:${Math.round(px * 0.4)}px" aria-hidden="true">${esc(iniciales(nombre))}</span>`;
+}
 function encabezado() {
   const p = S.perfil;
   return `<header class="top">
-    <div class="marca">${ESCUDO}<div><b>URAC</b><small>Disponibilidad</small></div></div>
+    <div class="marca">${ESCUDO}<div><b>URAC</b><small>Unidad de Rescate Agreste Chena</small></div></div>
     ${p ? `<div class="quien">${esc(nombreCorto(p.nombre))}<small>${esc(ROLES[p.rol] || '')}</small></div>` : ''}
   </header>`;
 }
@@ -353,14 +431,52 @@ function vistaInactivo() {
 }
 
 // --- Mi estado (todos) ---
+function ficha() {
+  const p = S.perfil;
+  return `<div class="ficha">${avatar(S.email, p.nombre, 72)}
+    <div class="ficha-txt"><b>${esc(p.nombre)}</b><small>${esc(p.cargo)}</small>
+    <span class="chip">${p.cordada ? 'Perfil de cordada: ' + esc(CAT_NOMBRE[p.cordada] || p.cordada) : 'Sin perfil de cordada asignado'}</span></div></div>`;
+}
+
+function vistaClima() {
+  asegurarClima();
+  const l = S.llamado;
+  const lugar = lugarClima();
+  const local = !l || l.nivel === 'local';
+  const c = S.clima;
+  let cuerpo = '';
+  if (c.err && !c.datos) cuerpo = `<p class="error">${esc(c.err)}</p>`;
+  else if (!c.datos) cuerpo = '<p class="suave">Cargando pronóstico…</p>';
+  else if (local) {
+    const p = proximas24(c.datos);
+    cuerpo = `<p class="clima-res">Mín <b>${p.res.tmin}°</b> · Máx <b>${p.res.tmax}°</b> · Lluvia hasta <b>${p.res.lluviaMax}%</b>${p.res.mm ? ` (${p.res.mm} mm)` : ''} · Ráfagas hasta <b>${p.res.rafagaMax} km/h</b> · Isoterma 0° desde <b>${p.res.isoMin} m</b></p>
+      ${p.alertas.length ? `<div class="alertas">${p.alertas.map((a) => `<span class="pill p-vence">${esc(a)}</span>`).join('')}</div>` : ''}
+      <div class="horas">${p.bloques.map((b) => `<div class="hb"><small>${b.hora}</small><b>${b.temp}°</b><span>${esc(b.desc)}</span><small>Lluvia ${b.lluvia}%</small><small>Viento ${b.viento}/${b.rafaga}</small></div>`).join('')}</div>
+      <p class="suave" style="font-size:12px">Viento: promedio/ráfaga en km/h.</p>`;
+  } else {
+    const dias = proximos5(c.datos);
+    cuerpo = `<ul class="dias">${dias.map((d) => `<li>
+      <div class="d1"><b>${esc(d.nombre)}</b><span>${esc(d.desc)}</span></div>
+      <div class="d2"><b>${d.tmin}° / ${d.tmax}°</b><small>Lluvia ${d.lluvia}%${d.mm ? ' · ' + d.mm + ' mm' : ''}</small><small>Ráfagas ${d.rafaga} km/h${d.isoMin !== null ? ' · Iso 0° ' + d.isoMin + ' m' : ''} · UV ${d.uv}</small>
+      ${d.alertas.length ? `<span class="pill p-vence">${esc(d.alertas[0])}</span>` : ''}</div></li>`).join('')}</ul>`;
+  }
+  return `<section class="clima">
+    <div class="clima-top"><h3>${local ? 'Clima · próximas 24 h' : 'Clima · próximos 5 días'}</h3><small>${esc(lugar.nombre)}</small></div>
+    ${cuerpo}
+    <small class="suave" style="font-size:12px">Pronóstico: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo.com</a>${c.en ? ' · actualizado ' + hhmm(new Date(c.en)) : ''}</small>
+  </section>`;
+}
+
 function vistaEstado() {
   const l = S.llamado;
   if (!l) {
     return `<main>
+      ${ficha()}
       <div class="estado" style="background: var(--panel)"><b style="font-size:32px">SIN LLAMADOS ACTIVOS</b>
       <small>Fase de preparación. Te avisaremos por radio 5-1 y por el grupo de WhatsApp.</small></div>
       ${avisos()}
       ${esLider() ? '<button class="principal" data-act="tab" data-v="abrir">ABRIR LLAMADO</button>' : ''}
+      ${vistaClima()}
       <div class="hueco"></div><button class="enlace" data-act="salir">Cerrar sesión</button>
     </main>`;
   }
@@ -409,8 +525,9 @@ function vistaEstado() {
       <button class="gigante no" data-act="noDisponible" ${S.ocupado ? 'disabled' : ''}>NO DISPONIBLE</button>
       ${S.paso === 'cambiar' ? '<button class="enlace" data-act="paso" data-v="">Volver</button>' : ''}`;
   }
-  return `${banda(l)}<main>${avisos()}${cuerpo}
+  return `${banda(l)}<main>${ficha()}${avisos()}${cuerpo}
     ${l.fase !== 'movilizacion' ? '<p class="suave">Si la fase pasa a Movilización, te pediremos tu hora estimada de llegada al Cuartel General.</p>' : ''}
+    ${vistaClima()}
     <div class="hueco"></div><button class="enlace" data-act="salir">Cerrar sesión</button></main>`;
 }
 
@@ -437,6 +554,13 @@ function vistaAbrir() {
     <div><label>Nivel</label>${seg('nivel', NIVELES)}</div>
     <div class="campo"><label for="desc">Descripción breve</label>
       <textarea id="desc" rows="3" data-bind="desc" placeholder="Ej.: Búsqueda de persona desaparecida, sector cordillerano.">${esc(S.f.desc)}</textarea></div>
+    <div class="campo"><label for="lugarQ">Lugar del incidente (para el pronóstico)</label>
+      <div class="fila-input"><input id="lugarQ" data-bind="lugarQ" value="${esc(S.f.lugarQ)}" placeholder="Ej.: Cerro Chena, San José de Maipo">
+      <button class="neutro" style="width:auto;padding:0 16px" data-act="buscarLugar" ${S.ocupado ? 'disabled' : ''}>Buscar</button></div>
+      <p class="suave" style="margin-top:6px">Seleccionado: <b>${esc((S.f.lugar || SAN_BERNARDO).nombre)}</b></p>
+      ${S.lugares.map((x, i) => `<button class="opcion-lugar" data-act="elegirLugar" data-v="${i}">${esc(x.nombre)}${x.altura ? ' · ' + Math.round(x.altura) + ' m' : ''}</button>`).join('')}
+    </div>
+    <p class="suave">Activación Local: clima de 24 h. Regional o SNO: clima de 5 días.</p>
     ${plazo ? `<p class="suave">Se marcará el plazo de ${PLAZO_SNO_H} h para reportar disponibilidad al SNO.</p>` : ''}
     ${avisos()}
     <button class="principal" data-act="abrirLlamado" ${S.ocupado ? 'disabled' : ''}>ABRIR LLAMADO</button>
@@ -465,6 +589,23 @@ function cordadaHtml(n) {
   const ok = n >= CORDADA_MIN;
   return `<div class="cordada ${ok ? 'ok' : 'falta'}">${ok ? CHECK : EQUIS}
     <span>${ok ? `Cordada mínima (${CORDADA_MIN}) alcanzada${n > CORDADA_MIN ? ' · ' + n + ' disponibles' : ''}` : `Faltan ${CORDADA_MIN - n} para la cordada mínima (${CORDADA_MIN})`}</span></div>`;
+}
+
+function cordadasHtml(res, conNombres) {
+  const cajas = res.cordadas.map((c) => {
+    const n = c.puestos.filter((pu) => pu.p).length;
+    const faltan = c.puestos.filter((pu) => !pu.p).map((pu) => pu.cat.nombre);
+    if (!conNombres) {
+      return `<div class="cordada-box"><div class="cb-top"><b>CORDADA ${c.nombre.toUpperCase()}</b><span class="pill ${c.completa ? 'p-si' : 'p-vence'}">${n}/${c.puestos.length}</span></div>
+        <small>${c.completa ? 'Completa' : 'Falta: ' + esc(faltan.join(', '))}</small></div>`;
+    }
+    return `<div class="cordada-box"><div class="cb-top"><b>CORDADA ${c.nombre.toUpperCase()}</b><span class="pill ${c.completa ? 'p-si' : 'p-vence'}">${n}/${c.puestos.length}</span></div>
+      <ul class="puestos">${c.puestos.map((pu) => `<li><span class="cat">${esc(pu.cat.nombre)}</span>${pu.p
+        ? `<span class="per">${avatar(pu.p.email, pu.p.nombre, 28)}<span>${esc(nombreCorto(pu.p.nombre))}${pu.p.cat !== pu.cat.id ? `<small> (${esc(CAT_NOMBRE[pu.p.cat] || 'sin perfil')})</small>` : ''}</span></span>`
+        : '<span class="falta">FALTA</span>'}</li>`).join('')}</ul></div>`;
+  }).join('');
+  const reserva = res.reserva.length ? `<p class="suave">En reserva: ${conNombres ? esc(res.reserva.map((x) => nombreCorto(x.nombre)).join(', ')) : res.reserva.length}</p>` : '';
+  return `<label>Cordadas sugeridas (según perfiles disponibles)</label>${cajas || '<p class="suave">Aún no hay disponibles para armar una cordada.</p>'}${reserva}`;
 }
 
 function vistaTablero() {
@@ -501,9 +642,12 @@ function vistaTablero() {
       <div class="cont gris"><b>${k.sr}</b><span>Sin respuesta</span></div>
     </div>
     ${cordadaHtml(k.si)}
+    ${cordadasHtml(armarCordadas(filas.filter((f) => f.c === 'si' || f.c === 'vence')
+        .sort((a, b) => (aFecha(a.r.en)?.getTime() || 0) - (aFecha(b.r.en)?.getTime() || 0))
+        .map((f) => ({ email: f.email, nombre: f.nombre, cat: f.cordada || null }))), true)}
     <div class="filtros" role="group" aria-label="Filtro">${fil('todos', 'Todos ' + filas.length)}${fil('si', 'Disp.')}${fil('no', 'No disp.')}${fil('sr', 'Sin resp.')}</div>
     <ul class="lista">${lista.map((f) => `<li>
-      <div><div class="nom">${esc(nombreCorto(f.nombre))}</div><small>${esc(f.cargo)}</small></div>
+      <div class="con-foto">${avatar(f.email, f.nombre, 36)}<div><div class="nom">${esc(nombreCorto(f.nombre))}</div><small>${esc(f.cordada ? CAT_NOMBRE[f.cordada] || f.cargo : f.cargo)}</small></div></div>
       <div class="der"><span class="pill ${PILL[f.c][0]}">${PILL[f.c][1]}</span><small>${esc(detalle(f))}</small></div>
     </li>`).join('') || '<li><span class="suave">Nadie en este filtro.</span></li>'}</ul>
     <button class="contorno" data-act="compartir">COMPARTIR LLAMADO (WHATSAPP)</button>
@@ -523,10 +667,11 @@ function vistaResumen() {
   const ahora = Date.now();
   let si = 0, no = 0;
   const vig = { 2: 0, 6: 0, 12: 0 };
+  const disp = [];
   entradas.forEach((e) => {
     const c = clasificar(e, ahora);
     if (c === 'si' || c === 'vence') {
-      si++;
+      si++; disp.push({ cat: e.c || null });
       const h = aFecha(e.h);
       [2, 6, 12].forEach((x) => { if (!h || h.getTime() > ahora + x * H) vig[x]++; });
     } else if (c === 'no') no++;
@@ -540,6 +685,7 @@ function vistaResumen() {
     <div class="barra" role="img" aria-label="${si} disponibles, ${no} no disponibles, ${sr} sin respuesta">
       <div style="flex:${si}; background: var(--verde)"></div><div style="flex:${no}; background: var(--rojo)"></div><div style="flex:${sr}; background:#3A3A3A"></div></div>
     ${cordadaHtml(si)}
+    ${cordadasHtml(armarCordadas(disp), false)}
     <label>Disponibles que siguen vigentes</label>
     <div class="tres">${[2, 6, 12].map((x) => `<div class="cont panel"><b>${vig[x]}</b><span>en ${x} h</span></div>`).join('')}</div>
     <p class="suave">Se actualiza solo. El detalle por nombre lo ve el Líder de la Unidad.</p>
@@ -549,6 +695,8 @@ function vistaResumen() {
 // --- Nómina (Líder/Administrador) ---
 function vistaNomina() {
   const activos = S.nomina.filter((n) => n.activo).length;
+  const opcCordada = (sel) => `<option value="">Sin asignar</option>${CATEGORIAS.map((c) => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}`;
+  const sinPerfil = S.nomina.filter((n) => n.activo && !n.cordada).length;
   return `<main>
     <h3>Agregar integrante</h3>
     <div class="campo"><label for="nNombre">Nombre</label><input id="nNombre" list="nombres" data-bind="nNombre" value="${esc(S.f.nNombre)}"></div>
@@ -558,15 +706,21 @@ function vistaNomina() {
       <div class="campo"><label for="nCargo">Cargo</label><select id="nCargo" data-bind="nCargo">${CARGOS.map((c) => `<option ${S.f.nCargo === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
       <div class="campo"><label for="nRol">Perfil en la app</label><select id="nRol" data-bind="nRol">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${S.f.nRol === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
     </div>
+    <div class="campo"><label for="nCordada">Perfil de cordada</label><select id="nCordada" data-bind="nCordada">${opcCordada(S.f.nCordada)}</select></div>
     ${avisos()}
     <button class="principal" data-act="agregar" ${S.ocupado ? 'disabled' : ''}>AGREGAR</button>
     <h3>Nómina (${activos} activos)</h3>
-    <ul class="lista">${S.nomina.map((n) => `<li>
-      <div><div class="nom" style="${n.activo ? '' : 'color: var(--texto-suave); text-decoration: line-through'}">${esc(n.nombre)}</div><small>${esc(n.cargo)} · ${esc(n.email)}</small></div>
-      <div class="der">
-        <label class="suave" for="rol-${esc(n.email)}" style="position:absolute;left:-9999px">Perfil de ${esc(n.nombre)}</label>
-        <select id="rol-${esc(n.email)}" data-act-change="rol" data-email="${esc(n.email)}" style="min-height:44px; padding:6px; width:auto">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${n.rol === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
-        <button class="enlace" data-act="activo" data-email="${esc(n.email)}">${n.activo ? 'Desactivar' : 'Activar'}</button>
+    ${sinPerfil ? `<p class="aviso">${sinPerfil} integrante(s) activos sin perfil de cordada: solo podrán ocupar el puesto de Apoyo.</p>` : ''}
+    <ul class="miembros">${S.nomina.map((n, i) => `<li class="miembro">
+      <div class="m-top">${avatar(n.email, n.nombre, 52)}
+        <div><div class="nom" style="${n.activo ? '' : 'color: var(--texto-suave); text-decoration: line-through'}">${esc(n.nombre)}</div><small>${esc(n.cargo)} · ${esc(n.email)}</small></div></div>
+      <div class="dos">
+        <div class="campo"><label for="rol-${i}">Perfil en la app</label><select id="rol-${i}" data-act-change="rol" data-email="${esc(n.email)}">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${n.rol === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div class="campo"><label for="cor-${i}">Perfil de cordada</label><select id="cor-${i}" data-act-change="cordada" data-email="${esc(n.email)}">${opcCordada(n.cordada || '')}</select></div>
+      </div>
+      <div class="dos">
+        <label class="boton-archivo">${S.fotos[n.email] ? 'CAMBIAR FOTO' : 'AGREGAR FOTO'}<input type="file" accept="image/*" data-foto="${esc(n.email)}" class="oculto"></label>
+        <button class="neutro" data-act="activo" data-email="${esc(n.email)}">${n.activo ? 'DESACTIVAR' : 'ACTIVAR'}</button>
       </div></li>`).join('')}</ul>
   </main>`;
 }
@@ -615,6 +769,15 @@ $app.addEventListener('change', (e) => {
   if (t.dataset.actChange === 'rol') {
     const email = t.dataset.email;
     accion(() => updateDoc(doc(db, 'nomina', email), { rol: t.value }));
+  }
+  if (t.dataset.actChange === 'cordada') {
+    const email = t.dataset.email;
+    accion(() => updateDoc(doc(db, 'nomina', email), { cordada: t.value || null }));
+  }
+  if (t.dataset.foto) {
+    const email = t.dataset.foto; const archivo = t.files && t.files[0];
+    t.blur();
+    accion(() => subirFoto(email, archivo));
   }
 });
 // Si llegó un cambio mientras se escribía, se dibuja al salir del campo (con margen para no perder un toque).
@@ -674,6 +837,13 @@ $app.addEventListener('click', (e) => {
       break;
     }
     case 'agregar': accion(guardarIntegrante); break;
+    case 'buscarLugar': accion(async () => {
+      const q = S.f.lugarQ.trim();
+      if (q.length < 3) throw new Error('Escribe al menos 3 letras del lugar.');
+      S.lugares = await buscarLugares(q);
+      if (!S.lugares.length) S.err = 'No se encontró ese lugar. Prueba con otro nombre o la comuna.';
+    }); break;
+    case 'elegirLugar': S.f.lugar = S.lugares[Number(v)]; S.lugares = []; S.f.lugarQ = ''; render(); break;
     case 'activo': {
       const n = S.nomina.find((x) => x.email === b.dataset.email);
       if (n) accion(() => updateDoc(doc(db, 'nomina', n.email), { activo: !n.activo }));

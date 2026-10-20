@@ -15,8 +15,10 @@ service cloud.firestore {
     function lider() { return member() && rol() in ['lider', 'admin']; }
     function gerencia() { return member() && rol() in ['gerencia', 'lider', 'admin']; }
 
+    function miCordada() { return get(perfilPath()).data.get('cordada', null); }
     function nominaValida(d) {
-      return d.keys().hasOnly(['nombre', 'cargo', 'rol', 'activo'])
+      return d.keys().hasOnly(['nombre', 'cargo', 'rol', 'cordada', 'activo'])
+        && d.get('cordada', null) in [null, 'lider_cordada', 'navegante', 'tecnico', 'sanitario', 'comunicaciones', 'apoyo']
         && d.nombre is string && d.nombre.size() > 1 && d.nombre.size() <= 100
         && d.cargo is string && d.cargo.size() <= 100
         && d.rol in ['rescatista', 'gerencia', 'lider', 'admin']
@@ -44,13 +46,23 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Foto de cada integrante: la sube el Líder o el Administrador; la ven el propio integrante y el Líder.
+    match /fotos/{email} {
+      allow read: if (signed() && email == myEmail()) || lider();
+      allow create, update: if lider() && request.resource.data.keys().hasOnly(['img'])
+        && request.resource.data.img is string && request.resource.data.img.size() < 200000
+        && request.resource.data.img.matches('^data:image/jpeg;base64,.*');
+      allow delete: if lider();
+    }
+
     // Llamados (fases de Monitoreo, Alerta y Movilización).
     match /llamados/{id} {
       function llamadoValido(d) {
         return d.fase in ['monitoreo', 'alerta', 'movilizacion']
           && d.nivel in ['local', 'regional', 'sno']
           && d.abierto is bool
-          && d.descripcion is string && d.descripcion.size() <= 500;
+          && d.descripcion is string && d.descripcion.size() <= 500
+          && (!('lugar' in d) || (d.lugar.lat is number && d.lugar.lon is number && d.lugar.nombre is string));
       }
       function abierto() { return get(/databases/$(db)/documents/llamados/$(id)).data.abierto == true; }
 
@@ -78,7 +90,8 @@ service cloud.firestore {
         allow update: if member() && abierto()
           && request.resource.data.keys().hasOnly(['r'])
           && request.resource.data.r.diff(resource.data.r).affectedKeys().hasOnly([request.auth.uid])
-          && request.resource.data.r[request.auth.uid].keys().hasOnly(['e', 'h', 't'])
+          && request.resource.data.r[request.auth.uid].keys().hasOnly(['e', 'h', 't', 'c'])
+          && request.resource.data.r[request.auth.uid].get('c', null) == miCordada()
           && request.resource.data.r[request.auth.uid].e in ['si', 'no'];
         allow delete: if false;
       }

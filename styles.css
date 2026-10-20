@@ -124,3 +124,59 @@ textarea { resize: vertical; }
 .ok-msg { color: var(--verde-claro); font-size: 15px; margin: 0; }
 .centro { text-align: center; }
 .hueco { flex: 1; }
+
+/* Logo y fotos */
+.marca img { height: 46px; width: auto; }
+.foto { border-radius: 50%; object-fit: cover; border: 2px solid var(--amarillo); flex: none; display: inline-block; }
+.foto.ini { display: inline-flex; align-items: center; justify-content: center; background: var(--panel); color: var(--amarillo); font-family: var(--display); font-weight: 700; }
+.ficha { display: flex; align-items: center; gap: 14px; padding: 12px; background: var(--panel); }
+.ficha-txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ficha-txt b { font-size: 18px; }
+.ficha-txt small { color: var(--texto-suave); font-size: 14px; }
+.chip { align-self: flex-start; font-size: 13px; font-weight: 700; color: var(--negro); background: var(--amarillo); padding: 3px 8px; margin-top: 2px; }
+.con-foto { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+/* Clima */
+.clima { border: 1px solid var(--linea); padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.clima-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.clima-top h3 { font-size: 22px; }
+.clima-top small { color: var(--texto-suave); }
+.clima-res { margin: 0; font-size: 15px; line-height: 1.5; }
+.alertas { display: flex; flex-wrap: wrap; gap: 6px; }
+.horas { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.hb { flex: 0 0 96px; background: var(--panel); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.hb b { font-family: var(--display); font-size: 28px; line-height: 1; }
+.hb span { font-size: 13px; font-weight: 600; min-height: 34px; }
+.hb small { font-size: 12px; color: #CFCFCF; }
+ul.dias { list-style: none; margin: 0; padding: 0; }
+ul.dias li { display: flex; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid #262626; }
+.d1 { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.d1 b { text-transform: capitalize; }
+.d1 span { font-size: 14px; color: #E6E6E6; }
+.d2 { display: flex; flex-direction: column; align-items: flex-end; text-align: right; gap: 2px; }
+.d2 small { font-size: 12px; color: var(--texto-suave); }
+
+/* Cordadas */
+.cordada-box { border: 1px solid var(--borde); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.cb-top { display: flex; justify-content: space-between; align-items: center; }
+.cb-top b { font-family: var(--display); font-size: 20px; letter-spacing: 0.5px; }
+ul.puestos { list-style: none; margin: 0; padding: 0; }
+ul.puestos li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #262626; min-height: 44px; }
+.puestos .cat { font-size: 14px; color: var(--texto-suave); font-weight: 600; }
+.puestos .per { display: flex; align-items: center; gap: 8px; font-weight: 600; text-align: right; }
+.puestos .per small { color: var(--texto-suave); font-weight: 400; }
+.falta { font-size: 12px; font-weight: 700; color: #FF8A80; border: 1px solid #FF8A80; padding: 2px 8px; }
+
+/* Lugar */
+.fila-input { display: flex; gap: 8px; }
+.opcion-lugar { min-height: 48px; text-align: left; background: var(--panel); border: 1px solid var(--borde); color: var(--blanco); padding: 8px 12px; font-size: 15px; margin-top: 6px; width: 100%; }
+
+/* Nómina */
+ul.miembros { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.miembro { border: 1px solid var(--linea); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.m-top { display: flex; align-items: center; gap: 12px; }
+.m-top small { color: var(--texto-suave); font-size: 13px; word-break: break-all; }
+.miembro select { min-height: 44px; padding: 8px; }
+.boton-archivo { min-height: 50px; display: flex; align-items: center; justify-content: center; background: transparent; border: 2px solid var(--amarillo); color: var(--amarillo); font-family: var(--display); font-weight: 700; font-size: 18px; margin: 0; cursor: pointer; }
+.oculto { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
+.boton-archivo:focus-within { outline: 3px solid var(--amarillo-claro); }

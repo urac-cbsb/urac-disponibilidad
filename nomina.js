@@ -27,3 +27,16 @@ export const SUGERIDO = {
   'Bastián Galaz Retamal': { cargo: 'LUMED', rol: 'gerencia' },
   'Fabián Escobar Astudillo': { cargo: 'Oficial de Seguridad', rol: 'rescatista' }
 };
+
+// Perfiles de cordada (los asigna solo el Líder o el Administrador).
+// La cordada mínima es de 6 operadores (Procedimiento de Activación).
+// El sexto puesto, "Apoyo", lo ocupa quien tenga ese perfil o, si no hay, cualquier disponible sin puesto.
+export const CATEGORIAS = [
+  { id: 'lider_cordada', nombre: 'Líder de cordada' },
+  { id: 'navegante', nombre: 'Navegante' },
+  { id: 'tecnico', nombre: 'Técnico' },
+  { id: 'sanitario', nombre: 'Sanitario' },
+  { id: 'comunicaciones', nombre: 'Comunicaciones' },
+  { id: 'apoyo', nombre: 'Apoyo' }
+];
+export const CATEGORIA_LIBRE = 'apoyo';
