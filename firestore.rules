@@ -72,7 +72,7 @@ service cloud.firestore {
       allow read: if member();
       allow create: if lider() && llamadoValido(request.resource.data) && request.resource.data.abierto == true;
       allow update: if lider() && llamadoValido(request.resource.data);
-      allow delete: if false;
+      allow delete: if lider() && resource.data.abierto == false;
 
       // Bitácora de movimientos (base del informe): no se modifica; solo se borra al eliminar un llamado cerrado.
       match /eventos/{ev} {
@@ -85,7 +85,8 @@ service cloud.firestore {
           && request.resource.data.detalle is string && request.resource.data.detalle.size() <= 500
           && ((request.resource.data.tipo == 'respuesta' && abierto())
               || (lider() && request.resource.data.tipo in ['apertura', 'fase', 'mapa', 'cierre']));
-        allow update, delete: if false;
+        allow update: if false;
+        allow delete: if lider() && !abierto();
       }
 
       // Imagen georreferencial del lugar: la carga el Líder o el Administrador; la ven todos.
@@ -108,7 +109,7 @@ service cloud.firestore {
           && (request.resource.data.hasta == null || request.resource.data.hasta is timestamp)
           && (request.resource.data.eta == null || request.resource.data.eta is timestamp)
           && request.resource.data.en == request.time;
-        allow delete: if false;
+        allow delete: if lider() && !abierto();
       }
 
       // Resumen para Gerencia: estado, perfil de cordada y nombre de cada integrante, sin correos.
@@ -122,7 +123,7 @@ service cloud.firestore {
           && request.resource.data.r[request.auth.uid].get('c', null) == miCordada()
           && request.resource.data.r[request.auth.uid].get('n', miNombre()) == miNombre()
           && request.resource.data.r[request.auth.uid].e in ['si', 'no'];
-        allow delete: if false;
+        allow delete: if lider() && !abierto();
       }
     }
   }
