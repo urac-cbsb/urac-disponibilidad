@@ -30,7 +30,7 @@ export const SUGERIDO = {
 
 // Perfiles de cordada (los asigna solo el Líder o el Administrador).
 // La cordada mínima es de 6 operadores (Procedimiento de Activación).
-// El sexto puesto, "Apoyo", lo ocupa quien tenga ese perfil o, si no hay, cualquier disponible sin puesto.
+// Las cordadas se arman solas por orden de disponibilidad; el perfil solo ayuda a repartirlos.
 export const CATEGORIAS = [
   { id: 'lider_cordada', nombre: 'Líder de cordada' },
   { id: 'navegante', nombre: 'Navegante' },

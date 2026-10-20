@@ -242,23 +242,23 @@ function asegurarClima() {
 }
 
 // ---------- Cordadas ----------
-// Arma cordadas con los disponibles, en orden de respuesta: cada puesto se llena con quien tenga
-// ese perfil; el puesto libre ("Apoyo"), con quien quede. Si una cordada queda incompleta, no se arma otra.
+// Se arman solas, de 6 integrantes, en el orden en que se ponen disponibles.
+// Si hay integrantes con perfil de cordada, se procura que cada cordada lleve uno de cada perfil;
+// los cupos restantes se completan con los siguientes disponibles. La última puede quedar incompleta.
+const TAM_CORDADA = 6;
 function armarCordadas(disponibles) {
-  const pool = disponibles.slice();
+  const pool = disponibles.map((x, i) => ({ ...x, orden: i }));
   const cordadas = [];
   while (pool.length && cordadas.length < NOMBRES_CORDADA.length) {
-    const puestos = CATEGORIAS.map((c) => ({ cat: c, p: null }));
-    puestos.forEach((pu) => {
-      const i = pool.findIndex((x) => x.cat === pu.cat.id);
-      if (i >= 0) pu.p = pool.splice(i, 1)[0];
+    const miembros = [];
+    CATEGORIAS.forEach((c) => {
+      if (miembros.length >= TAM_CORDADA) return;
+      const i = pool.findIndex((x) => x.cat === c.id);
+      if (i >= 0) miembros.push(pool.splice(i, 1)[0]);
     });
-    const libre = puestos.find((pu) => pu.cat.id === CATEGORIA_LIBRE);
-    if (libre && !libre.p && pool.length) libre.p = pool.shift();
-    if (puestos.every((pu) => !pu.p)) break;
-    const completa = puestos.every((pu) => pu.p);
-    cordadas.push({ nombre: NOMBRES_CORDADA[cordadas.length], puestos, completa });
-    if (!completa) break;
+    while (miembros.length < TAM_CORDADA && pool.length) miembros.push(pool.shift());
+    miembros.sort((x, y) => x.orden - y.orden);
+    cordadas.push({ nombre: NOMBRES_CORDADA[cordadas.length], miembros, completa: miembros.length === TAM_CORDADA });
   }
   return { cordadas, reserva: pool };
 }
@@ -735,19 +735,16 @@ function cordadaHtml(n) {
 
 function cordadasHtml(res, conNombres) {
   const cajas = res.cordadas.map((c) => {
-    const n = c.puestos.filter((pu) => pu.p).length;
-    const faltan = c.puestos.filter((pu) => !pu.p).map((pu) => pu.cat.nombre);
-    if (!conNombres) {
-      return `<div class="cordada-box"><div class="cb-top"><b>CORDADA ${c.nombre.toUpperCase()}</b><span class="pill ${c.completa ? 'p-si' : 'p-vence'}">${n}/${c.puestos.length}</span></div>
-        <small>${c.completa ? 'Completa' : 'Falta: ' + esc(faltan.join(', '))}</small></div>`;
-    }
-    return `<div class="cordada-box"><div class="cb-top"><b>CORDADA ${c.nombre.toUpperCase()}</b><span class="pill ${c.completa ? 'p-si' : 'p-vence'}">${n}/${c.puestos.length}</span></div>
-      <ul class="puestos">${c.puestos.map((pu) => `<li><span class="cat">${esc(pu.cat.nombre)}</span>${pu.p
-        ? `<span class="per">${avatar(pu.p.email, pu.p.nombre, 28)}<span>${esc(nombreCorto(pu.p.nombre))}${pu.p.cat !== pu.cat.id ? `<small> (${esc(CAT_NOMBRE[pu.p.cat] || 'sin perfil')})</small>` : ''}</span></span>`
-        : '<span class="falta">FALTA</span>'}</li>`).join('')}</ul></div>`;
+    const n = c.miembros.length;
+    const cab = `<div class="cb-top"><b>CORDADA ${c.nombre.toUpperCase()}</b><span class="pill ${c.completa ? 'p-si' : 'p-vence'}">${n}/${TAM_CORDADA}</span></div>`;
+    const estado = c.completa ? '' : `<small class="suave">Faltan ${TAM_CORDADA - n} para completarla.</small>`;
+    if (!conNombres) return `<div class="cordada-box">${cab}${estado || '<small>Completa</small>'}</div>`;
+    return `<div class="cordada-box">${cab}
+      <ol class="miembros-cordada">${c.miembros.map((m) => `<li><span class="per">${avatar(m.email, m.nombre, 28)}<span>${esc(nombreCorto(m.nombre))}</span></span>${m.cat ? `<small class="suave">${esc(CAT_NOMBRE[m.cat] || '')}</small>` : ''}</li>`).join('')}</ol>
+      ${estado}</div>`;
   }).join('');
   const reserva = res.reserva.length ? `<p class="suave">En reserva: ${conNombres ? esc(res.reserva.map((x) => nombreCorto(x.nombre)).join(', ')) : res.reserva.length}</p>` : '';
-  return `<label>Cordadas sugeridas (según perfiles disponibles)</label>${cajas || '<p class="suave">Aún no hay disponibles para armar una cordada.</p>'}${reserva}`;
+  return `<label>Cordadas (se arman solas según disponibilidad)</label>${cajas || '<p class="suave">Aún no hay disponibles para armar una cordada.</p>'}${reserva}`;
 }
 
 // Tablero sin llamado activo: abrir llamado e informes de llamados cerrados.
@@ -960,8 +957,8 @@ function vistaInforme() {
     .sort((a, b) => (aFecha(a.r.en)?.getTime() || 0) - (aFecha(b.r.en)?.getTime() || 0))
     .map((f) => ({ email: f.email, nombre: f.nombre, cat: f.cordada || null }));
   const cord = armarCordadas(disponibles);
-  const tablaCordadas = cord.cordadas.map((c) => `<p><b>Cordada ${c.nombre}</b> (${c.puestos.filter((p) => p.p).length}/${c.puestos.length})</p>
-    <table><tr><th>Puesto</th><th>Integrante</th></tr>${c.puestos.map((pu) => `<tr><td>${esc(pu.cat.nombre)}</td><td>${pu.p ? esc(pu.p.nombre) : '<b>FALTA</b>'}</td></tr>`).join('')}</table>`).join('')
+  const tablaCordadas = cord.cordadas.map((c) => `<p><b>Cordada ${c.nombre}</b> (${c.miembros.length}/${TAM_CORDADA})</p>
+    <table><tr><th>N°</th><th>Integrante</th><th>Perfil de cordada</th></tr>${c.miembros.map((m, i) => `<tr><td>${i + 1}</td><td>${esc(m.nombre)}</td><td>${esc(m.cat ? CAT_NOMBRE[m.cat] || '' : '—')}</td></tr>`).join('')}</table>`).join('')
     || '<p>No hubo disponibles suficientes para armar una cordada.</p>';
   const orden = { si: 0, vence: 0, no: 1, vencida: 2, sr: 3 };
   const tablaPersonal = filas.sort((a, b) => orden[a.c] - orden[b.c] || a.nombre.localeCompare(b.nombre, 'es')).map((f) => {

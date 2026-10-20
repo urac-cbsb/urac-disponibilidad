@@ -246,3 +246,9 @@ ul.lista li.editor-fila { display: block; padding: 0 0 12px; border-bottom: 1px 
 .discretos { gap: 8px; }
 .discreto { min-height: 44px; padding: 0 10px; background: transparent; border: 1px solid #3A3A3A; color: #CFCFCF; font-family: var(--cuerpo); font-weight: 600; font-size: 14px; width: 100%; }
 .discreto:hover { border-color: var(--borde); color: var(--blanco); }
+
+/* Integrantes de cada cordada */
+ol.miembros-cordada { margin: 0; padding: 0 0 0 22px; }
+ol.miembros-cordada li { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 44px; border-bottom: 1px solid #262626; padding: 4px 0; }
+ol.miembros-cordada li::marker { color: var(--texto-suave); }
+ol.miembros-cordada .per { display: flex; align-items: center; gap: 8px; font-weight: 600; }
