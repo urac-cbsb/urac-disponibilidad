@@ -16,6 +16,8 @@ service cloud.firestore {
     // Gerencia según el cargo: jefes, Líder Alfa, Líder Bravo y LUMED (además del Líder y el Administrador).
     function gerencia() { return lider() || (member() && get(perfilPath()).data.cargo in ['Jefe de Operaciones', 'Jefe de Planificación', 'Jefe de Logística', 'Jefe de Administración y Finanzas', 'Líder Alfa', 'Líder Bravo', 'LUMED']); }
 
+    // Editan la nómina solo el Administrador y el Líder de Unidad.
+    function editorNomina() { return member() && (rol() == 'admin' || (rol() == 'lider' && get(perfilPath()).data.cargo == 'Líder de Unidad')); }
     function miCordada() { return get(perfilPath()).data.get('cordada', null); }
     function miNombre() { return get(perfilPath()).data.nombre; }
     // Clave de cada integrante en el resumen de Gerencia: su correo sin símbolos.
@@ -45,20 +47,20 @@ service cloud.firestore {
     match /nomina/{email} {
       allow read: if (signed() && email == myEmail()) || informe();
       allow create: if nominaValida(request.resource.data) && email == email.lower() && (
-        lider() ||
+        editorNomina() ||
         (signed() && email == myEmail() && !exists(configPath()) && existsAfter(configPath())
           && request.resource.data.rol == 'admin' && request.resource.data.activo == true));
-      allow update: if lider() && nominaValida(request.resource.data);
-      allow delete: if false;
+      allow update: if editorNomina() && nominaValida(request.resource.data);
+      allow delete: if editorNomina() && email != myEmail();
     }
 
     // Foto de cada integrante: la sube el Líder o el Administrador; la ven el propio integrante y el Líder.
     match /fotos/{email} {
       allow read: if (signed() && email == myEmail()) || lider();
-      allow create, update: if lider() && request.resource.data.keys().hasOnly(['img'])
+      allow create, update: if editorNomina() && request.resource.data.keys().hasOnly(['img'])
         && request.resource.data.img is string && request.resource.data.img.size() < 200000
         && request.resource.data.img.matches('^data:image/jpeg;base64,.*');
-      allow delete: if lider();
+      allow delete: if editorNomina();
     }
 
     // Llamados (fases de Monitoreo, Alerta y Movilización).
