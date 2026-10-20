@@ -993,7 +993,6 @@ function vistaNomina() {
     </div>
     <p class="suave">El acceso de Gerencia se asigna solo según la función (jefes, Líder Alfa, Líder Bravo y LUMED). Las funciones de mando no se pueden repetir.</p>
     <div class="campo"><label for="nCordada">Perfil de cordada</label><select id="nCordada" data-bind="nCordada">${opcCordada(S.f.nCordada)}</select></div>
-    ${avisos()}
     <button class="principal" data-act="agregar" ${S.ocupado ? 'disabled' : ''}>AGREGAR</button>
     <h3>Nómina URAC (${activos} activos)</h3>
     ${sinPerfil ? `<p class="aviso">${sinPerfil} integrante(s) activos sin perfil de cordada: igual entran a las cordadas por orden de disponibilidad.</p>` : ''}
