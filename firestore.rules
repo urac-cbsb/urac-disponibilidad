@@ -16,6 +16,7 @@ service cloud.firestore {
     function gerencia() { return member() && rol() in ['gerencia', 'lider', 'admin']; }
 
     function miCordada() { return get(perfilPath()).data.get('cordada', null); }
+    function miNombre() { return get(perfilPath()).data.nombre; }
     function nominaValida(d) {
       return d.keys().hasOnly(['nombre', 'cargo', 'rol', 'cordada', 'activo'])
         && d.get('cordada', null) in [null, 'lider_cordada', 'navegante', 'tecnico', 'sanitario', 'comunicaciones', 'apoyo']
@@ -58,7 +59,7 @@ service cloud.firestore {
     // Llamados (fases de Monitoreo, Alerta y Movilización).
     match /llamados/{id} {
       function llamadoValido(d) {
-        return d.fase in ['monitoreo', 'alerta', 'movilizacion']
+        return d.fase in ['monitoreo', 'alerta', 'movilizacion', 'operaciones', 'desmovilizacion']
           && d.nivel in ['local', 'regional', 'sno']
           && d.abierto is bool
           && d.descripcion is string && d.descripcion.size() <= 500
@@ -70,6 +71,31 @@ service cloud.firestore {
       allow create: if lider() && llamadoValido(request.resource.data) && request.resource.data.abierto == true;
       allow update: if lider() && llamadoValido(request.resource.data);
       allow delete: if false;
+
+      // Bitácora de movimientos (base del informe): nadie la modifica ni la borra.
+      match /eventos/{ev} {
+        allow read: if lider();
+        allow create: if member()
+          && request.resource.data.keys().hasOnly(['tipo', 'fase', 'detalle', 'por', 'nombre', 'en'])
+          && request.resource.data.por == myEmail()
+          && request.resource.data.nombre == miNombre()
+          && request.resource.data.en == request.time
+          && request.resource.data.detalle is string && request.resource.data.detalle.size() <= 500
+          && ((request.resource.data.tipo == 'respuesta' && abierto())
+              || (lider() && request.resource.data.tipo in ['apertura', 'fase', 'mapa', 'cierre']));
+        allow update, delete: if false;
+      }
+
+      // Imagen georreferencial del lugar: la carga el Líder o el Administrador; la ven todos.
+      match /adjuntos/{a} {
+        allow read: if member();
+        allow create, update: if lider()
+          && request.resource.data.keys().hasOnly(['img', 'por', 'nombre', 'en'])
+          && request.resource.data.img is string && request.resource.data.img.size() < 900000
+          && request.resource.data.img.matches('^data:image/jpeg;base64,.*')
+          && request.resource.data.en == request.time;
+        allow delete: if lider();
+      }
 
       // Respuesta de cada integrante: solo él la escribe; solo él y el Líder la leen.
       match /respuestas/{email} {
@@ -83,15 +109,16 @@ service cloud.firestore {
         allow delete: if false;
       }
 
-      // Resumen anónimo para Gerencia: solo totales, sin nombres ni correos.
+      // Resumen para Gerencia: estado, perfil de cordada y nombre de cada integrante, sin correos.
       match /resumen/{doc} {
         allow read: if gerencia();
         allow create: if lider() && request.resource.data.keys().hasOnly(['r']);
         allow update: if member() && abierto()
           && request.resource.data.keys().hasOnly(['r'])
           && request.resource.data.r.diff(resource.data.r).affectedKeys().hasOnly([request.auth.uid])
-          && request.resource.data.r[request.auth.uid].keys().hasOnly(['e', 'h', 't', 'c'])
+          && request.resource.data.r[request.auth.uid].keys().hasOnly(['e', 'h', 't', 'c', 'n'])
           && request.resource.data.r[request.auth.uid].get('c', null) == miCordada()
+          && request.resource.data.r[request.auth.uid].get('n', miNombre()) == miNombre()
           && request.resource.data.r[request.auth.uid].e in ['si', 'no'];
         allow delete: if false;
       }

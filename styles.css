@@ -180,3 +180,39 @@ ul.miembros { list-style: none; margin: 0; padding: 0; display: flex; flex-direc
 .boton-archivo { min-height: 50px; display: flex; align-items: center; justify-content: center; background: transparent; border: 2px solid var(--amarillo); color: var(--amarillo); font-family: var(--display); font-weight: 700; font-size: 18px; margin: 0; cursor: pointer; }
 .oculto { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
 .boton-archivo:focus-within { outline: 3px solid var(--amarillo-claro); }
+
+/* Encabezado con escudos (todos a la misma altura) */
+.marca { gap: 8px; }
+.marca .logo { height: 46px; width: auto; display: block; }
+.marca img:not(.logo) { height: 46px; }
+
+/* Fase de desmovilización */
+.fase-desmovilizacion { background: #3A3A3A; color: var(--blanco); }
+
+/* Imagen del lugar */
+.mapa-img { width: 100%; height: auto; display: block; border: 1px solid var(--borde); }
+
+/* Informes */
+.chico { min-height: 44px !important; width: auto !important; padding: 0 14px; font-size: 16px !important; }
+ul.informes li.destacado { background: var(--panel); padding: 10px; border: 1px solid var(--amarillo); }
+.informe { background: #FFFFFF; color: #111111; padding: 20px 16px; font-family: var(--cuerpo); font-size: 14px; line-height: 1.45; }
+.informe h1 { font-family: var(--display); font-size: 28px; margin: 10px 0 2px; }
+.informe h2 { font-family: var(--display); font-size: 20px; margin: 20px 0 8px; border-bottom: 2px solid #111; padding-bottom: 3px; }
+.informe .inf-sub { margin: 0 0 12px; color: #444; }
+.informe .inf-logos { display: flex; gap: 10px; }
+.informe .inf-logos img { height: 64px; width: auto; }
+.informe table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.informe th, .informe td { border: 1px solid #BBBBBB; padding: 5px 6px; text-align: left; vertical-align: top; }
+.informe th { background: #F1F1F1; }
+.informe table.datos th { width: 34%; }
+.informe .inf-pie { margin-top: 18px; font-size: 12px; color: #444; }
+.informe .mapa-img { border-color: #BBBBBB; }
+
+@media print {
+  html, body { background: #FFFFFF; }
+  #app { max-width: none; }
+  header.top, nav.tabs, footer, .no-print { display: none !important; }
+  main { padding: 0; }
+  .informe { padding: 0; }
+  .informe table, .informe img { page-break-inside: avoid; }
+}

@@ -7,7 +7,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   getFirestore, doc, getDoc, collection, query, where, onSnapshot, writeBatch,
-  serverTimestamp, Timestamp, updateDoc, setDoc
+  serverTimestamp, Timestamp, updateDoc, setDoc, getDocs, orderBy
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 import { firebaseConfig } from './config.js';
 import { NOMBRES, CARGOS, SUGERIDO, CATEGORIAS, CATEGORIA_LIBRE } from './nomina.js';
@@ -18,11 +18,13 @@ const TZ = 'America/Santiago';
 const CORDADA_MIN = 6;
 const PLAZO_SNO_H = 4;
 const VENCE_PRONTO_MIN = 30;
-const FASES = { monitoreo: 'MONITOREO', alerta: 'ALERTA', movilizacion: 'MOVILIZACIÓN' };
+const FASES = { monitoreo: 'MONITOREO', alerta: 'ALERTA', movilizacion: 'MOVILIZACIÓN', desmovilizacion: 'DESMOVILIZACIÓN' };
+const FASES_APERTURA = { monitoreo: 'MONITOREO', alerta: 'ALERTA', movilizacion: 'MOVILIZACIÓN' };
+const FASES_CLIMA = ['monitoreo', 'alerta', 'movilizacion'];
 const NIVELES = { local: 'Local', regional: 'Regional', sno: 'SNO' };
 const ROLES = { rescatista: 'Rescatista', gerencia: 'Gerencia', lider: 'Líder', admin: 'Administrador' };
 const H = 3600 * 1000;
-const ESCUDO = '<img src="logo.png" alt="Escudo URAC" width="36" height="46" style="display:block">';
+const LOGOS = '<img src="logo.png" alt="Escudo URAC" class="logo"><img src="cbsb.png" alt="Escudo Cuerpo de Bomberos de San Bernardo" class="logo">';
 const CAT_NOMBRE = Object.fromEntries(CATEGORIAS.map((c) => [c.id, c.nombre]));
 const NOMBRES_CORDADA = ['Alfa', 'Bravo', 'Charlie', 'Delta'];
 const CHECK = '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l5 5L20 6" fill="none" stroke="#3CCB6B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -37,17 +39,22 @@ const S = {
   tab: 'estado', paso: null, filtro: 'todos',
   llamado: null, miResp: null, respuestas: {}, nomina: [], resumen: null, fotos: {},
   clima: { clave: '', datos: null, err: '', cargando: false, en: 0 }, lugares: [],
+  mapa: null, cerrados: [], ultimoCerrado: null, informe: null,
   f: { email: '', clave: '', nombre: '', fase: 'alerta', nivel: 'local', desc: '', hora: '', lugarQ: '', lugar: null,
        nEmail: '', nNombre: '', nCargo: 'Operador de Rescate', nRol: 'rescatista', nCordada: '' },
   msg: '', err: '', ocupado: false
 };
 
 let app, auth, db;
-let subs = { perfil: null, miFoto: null, llamados: null, miResp: null, respuestas: null, resumen: null, nomina: null, fotos: null };
+let subs = { perfil: null, miFoto: null, llamados: null, miResp: null, respuestas: null, resumen: null, nomina: null, fotos: null, mapa: null, cerrados: null };
 let llamadoId = null;
 
 const esLider = () => S.perfil && ['lider', 'admin'].includes(S.perfil.rol);
 const esGerencia = () => S.perfil && S.perfil.rol === 'gerencia';
+// El Administrador gestiona la cuenta y tiene las facultades del Líder, pero no integra la URAC:
+// no responde disponibilidad ni cuenta en totales ni cordadas.
+const esAdmin = () => S.perfil && S.perfil.rol === 'admin';
+const integrantes = () => S.nomina.filter((n) => n.activo && n.rol !== 'admin');
 
 // ---------- Utilidades ----------
 function esc(v) {
@@ -120,22 +127,22 @@ function iniciarSesion() {
     S.cargando = false;
     if (!snap.exists()) {
       S.perfil = null; S.sinNomina = true;
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados'].forEach(cortar); llamadoId = null;
       try { S.bootstrapLibre = !(await getDoc(doc(db, 'config', 'inicial'))).exists(); } catch (e) { S.bootstrapLibre = false; }
       return render();
     }
     S.sinNomina = false;
     S.perfil = snap.data();
     if (!S.perfil.activo) {
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados'].forEach(cortar); llamadoId = null;
       return render();
     }
     if (rolActual !== S.perfil.rol || !subs.llamados) {
       rolActual = S.perfil.rol;
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados'].forEach(cortar); llamadoId = null;
       escucharLlamados();
-      if (esLider()) { escucharNomina(); escucharFotos(); }
-      if (S.tab !== 'estado' && !tabsDisponibles().some((t) => t.id === S.tab)) S.tab = 'estado';
+      if (esLider()) { escucharNomina(); escucharFotos(); escucharCerrados(); }
+      if (!tabsDisponibles().some((t) => t.id === S.tab)) S.tab = tabsDisponibles()[0].id;
     }
     render();
   }, (e) => { S.err = errTexto(e); S.cargando = false; render(); });
@@ -153,9 +160,11 @@ function escucharLlamados() {
     const nuevoId = ultimo ? ultimo.id : null;
     if (nuevoId !== llamadoId) {
       llamadoId = nuevoId;
-      cortar('miResp'); cortar('respuestas'); cortar('resumen');
-      S.miResp = null; S.respuestas = {}; S.resumen = null; S.paso = null;
+      cortar('miResp'); cortar('respuestas'); cortar('resumen'); cortar('mapa');
+      S.miResp = null; S.respuestas = {}; S.resumen = null; S.mapa = null; S.paso = null;
       if (llamadoId) {
+        subs.mapa = onSnapshot(doc(db, 'llamados', llamadoId, 'adjuntos', 'mapa'),
+          (s) => { S.mapa = s.exists() ? s.data() : null; render(); }, () => {});
         subs.miResp = onSnapshot(doc(db, 'llamados', llamadoId, 'respuestas', S.email),
           (s) => { S.miResp = s.exists() ? s.data() : null; render(); }, () => {});
         if (esLider()) {
@@ -178,6 +187,14 @@ function escucharNomina() {
     const l = []; qs.forEach((d) => l.push({ email: d.id, ...d.data() }));
     l.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
     S.nomina = l; render();
+  }, () => {});
+}
+
+function escucharCerrados() {
+  subs.cerrados = onSnapshot(query(collection(db, 'llamados'), where('abierto', '==', false)), (qs) => {
+    const l = []; qs.forEach((d) => l.push({ id: d.id, ...d.data() }));
+    l.sort((a, b) => (aFecha(b.cerradoEn)?.getTime() || 0) - (aFecha(a.cerradoEn)?.getTime() || 0));
+    S.cerrados = l.slice(0, 15); render();
   }, () => {});
 }
 
@@ -236,13 +253,20 @@ async function accion(fn) {
   S.ocupado = false; render();
 }
 
-async function guardarRespuesta({ estado, hasta = null, eta = null }) {
+// Registra un movimiento en la bitácora del llamado (base del informe).
+function evento(b, id, tipo, fase, detalle) {
+  b.set(doc(collection(db, 'llamados', id, 'eventos')), {
+    tipo, fase, detalle: String(detalle || '').slice(0, 500), por: S.email, nombre: S.perfil.nombre, en: serverTimestamp()
+  });
+}
+
+async function guardarRespuesta({ estado, hasta = null }) {
   const id = S.llamado.id;
   const b = writeBatch(db);
   const hastaTs = hasta ? Timestamp.fromDate(hasta) : null;
-  const etaTs = eta ? Timestamp.fromDate(eta) : null;
-  b.set(doc(db, 'llamados', id, 'respuestas', S.email), { estado, hasta: hastaTs, eta: etaTs, en: serverTimestamp() });
-  b.update(doc(db, 'llamados', id, 'resumen', 'actual'), { ['r.' + auth.currentUser.uid]: { e: estado, h: hastaTs, t: etaTs, c: S.perfil.cordada || null } });
+  b.set(doc(db, 'llamados', id, 'respuestas', S.email), { estado, hasta: hastaTs, eta: null, en: serverTimestamp() });
+  b.update(doc(db, 'llamados', id, 'resumen', 'actual'), { ['r.' + auth.currentUser.uid]: { e: estado, h: hastaTs, t: null, c: S.perfil.cordada || null, n: S.perfil.nombre } });
+  evento(b, id, 'respuesta', S.llamado.fase, estado === 'no' ? 'NO DISPONIBLE' : 'DISPONIBLE ' + (hasta ? 'hasta ' + cuando(hasta) : 'hasta nuevo aviso'));
   await b.commit();
   S.paso = null;
 }
@@ -256,9 +280,12 @@ async function abrirLlamado() {
   const desc = S.f.desc.trim();
   if (!desc) { S.err = 'Escribe una descripción breve.'; return; }
   const ahora = new Date();
-  const total = S.nomina.filter((n) => n.activo).length;
+  const total = integrantes().length;
   const b = writeBatch(db);
-  if (S.llamado) b.update(doc(db, 'llamados', S.llamado.id), { abierto: false, cerradoEn: serverTimestamp(), cerradoPor: S.email });
+  if (S.llamado) {
+    b.update(doc(db, 'llamados', S.llamado.id), { abierto: false, cerradoEn: serverTimestamp(), cerradoPor: S.email });
+    evento(b, S.llamado.id, 'cierre', S.llamado.fase, 'Cerrado al abrir un nuevo llamado');
+  }
   const ref = doc(collection(db, 'llamados'));
   const plazo = (S.f.nivel === 'sno' && S.f.fase === 'alerta') ? Timestamp.fromDate(new Date(ahora.getTime() + PLAZO_SNO_H * H)) : null;
   const lugar = S.f.lugar || SAN_BERNARDO;
@@ -267,6 +294,7 @@ async function abrirLlamado() {
     plazoSNO: plazo, creadoEn: serverTimestamp(), creadoPor: S.email };
   b.set(ref, datos);
   b.set(doc(db, 'llamados', ref.id, 'resumen', 'actual'), { r: {} });
+  evento(b, ref.id, 'apertura', S.f.fase, `Nivel ${NIVELES[S.f.nivel]} · ${lugar.nombre} · ${desc}`);
   await b.commit();
   S.f.desc = ''; S.f.lugar = null; S.f.lugarQ = ''; S.lugares = []; S.tab = 'tablero';
   S.msg = 'Llamado abierto. Compártelo ahora en el grupo de WhatsApp.';
@@ -279,15 +307,60 @@ async function cambiarFase(fase) {
   if (!confirm(`¿Pasar el llamado a FASE DE ${FASES[fase]}?`)) return;
   const cambios = { fase, faseEn: serverTimestamp() };
   if (fase === 'alerta' && l.nivel === 'sno' && !l.plazoSNO) cambios.plazoSNO = Timestamp.fromDate(new Date(Date.now() + PLAZO_SNO_H * H));
-  await updateDoc(doc(db, 'llamados', l.id), cambios);
+  const b = writeBatch(db);
+  b.update(doc(db, 'llamados', l.id), cambios);
+  evento(b, l.id, 'fase', fase, `De ${FASES[l.fase]} a ${FASES[fase]}`);
+  await b.commit();
   S.msg = `Fase cambiada a ${FASES[fase]}. Avisa por radio 5-1 y WhatsApp.`;
   abrirWhatsApp(mensajeLlamado({ ...l, fase }));
 }
 
 async function cerrarLlamado() {
   if (!confirm('¿Cerrar el llamado? Los integrantes dejarán de verlo.')) return;
-  await updateDoc(doc(db, 'llamados', S.llamado.id), { abierto: false, cerradoEn: serverTimestamp(), cerradoPor: S.email });
-  S.msg = 'Llamado cerrado.';
+  const l = S.llamado;
+  const b = writeBatch(db);
+  b.update(doc(db, 'llamados', l.id), { abierto: false, cerradoEn: serverTimestamp(), cerradoPor: S.email });
+  evento(b, l.id, 'cierre', l.fase, 'Llamado cerrado');
+  await b.commit();
+  S.ultimoCerrado = l.id; S.tab = 'tablero';
+  S.msg = 'Llamado cerrado. Ya puedes generar el informe.';
+}
+
+// Imagen georreferencial del lugar (captura de mapa, croquis, etc.). Se reduce para caber en la base de datos.
+async function subirMapa(archivo) {
+  if (!archivo || !S.llamado) return;
+  if (!archivo.type.startsWith('image/')) throw new Error('El archivo debe ser una imagen.');
+  const bmp = await createImageBitmap(archivo);
+  let escala = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+  let url = '';
+  for (let intento = 0; intento < 6; intento++) {
+    const c = document.createElement('canvas');
+    c.width = Math.round(bmp.width * escala); c.height = Math.round(bmp.height * escala);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    url = c.toDataURL('image/jpeg', 0.72);
+    if (url.length < 850000) break;
+    escala *= 0.8;
+  }
+  if (url.length >= 850000) throw new Error('La imagen es demasiado grande. Prueba con una captura más pequeña.');
+  const l = S.llamado;
+  const b = writeBatch(db);
+  b.set(doc(db, 'llamados', l.id, 'adjuntos', 'mapa'), { img: url, por: S.email, nombre: S.perfil.nombre, en: serverTimestamp() });
+  evento(b, l.id, 'mapa', l.fase, 'Imagen georreferencial del lugar cargada');
+  await b.commit();
+  S.msg = 'Imagen del lugar publicada para todos los integrantes.';
+}
+
+async function cargarInforme(id) {
+  S.informe = { cargando: true };
+  S.tab = 'informe'; render();
+  const ref = doc(db, 'llamados', id);
+  const [ls, evs, rs, ms] = await Promise.all([
+    getDoc(ref), getDocs(query(collection(db, 'llamados', id, 'eventos'), orderBy('en'))),
+    getDocs(collection(db, 'llamados', id, 'respuestas')), getDoc(doc(db, 'llamados', id, 'adjuntos', 'mapa'))
+  ]);
+  const respuestas = {}; rs.forEach((d) => { respuestas[d.id] = d.data(); });
+  const eventos = []; evs.forEach((d) => eventos.push(d.data()));
+  S.informe = { cargando: false, l: { id, ...ls.data() }, eventos, respuestas, mapa: ms.exists() ? ms.data() : null, generado: new Date() };
 }
 
 async function guardarIntegrante() {
@@ -336,12 +409,13 @@ function avatar(email, nombre, px) {
 function encabezado() {
   const p = S.perfil;
   return `<header class="top">
-    <div class="marca">${ESCUDO}<div><b>URAC</b><small>Unidad de Rescate Agreste Chena</small></div></div>
+    <div class="marca">${LOGOS}</div>
     ${p ? `<div class="quien">${esc(nombreCorto(p.nombre))}<small>${esc(ROLES[p.rol] || '')}</small></div>` : ''}
   </header>`;
 }
 
 function tabsDisponibles() {
+  if (esAdmin()) return [{ id: 'tablero', txt: 'Tablero' }, { id: 'nomina', txt: 'Nómina' }];
   const t = [{ id: 'estado', txt: 'Mi estado' }];
   if (esLider()) t.push({ id: 'tablero', txt: 'Tablero' }, { id: 'nomina', txt: 'Nómina' });
   else if (esGerencia()) t.push({ id: 'resumen', txt: 'Resumen' });
@@ -467,16 +541,35 @@ function vistaClima() {
   </section>`;
 }
 
+// Clima (solo en Monitoreo, Alerta y Movilización) e imagen georreferencial del lugar.
+function terreno(l) {
+  const clima = FASES_CLIMA.includes(l.fase) ? vistaClima() : '';
+  const lugar = l.lugar && typeof l.lugar.lat === 'number' ? l.lugar : null;
+  const enlaceMapa = lugar ? `<a href="https://www.google.com/maps?q=${lugar.lat},${lugar.lon}" target="_blank" rel="noopener">Ver ${esc(lugar.nombre)} en el mapa</a>` : '';
+  const m = S.mapa;
+  let mapa = '';
+  if (m || esLider()) {
+    mapa = `<section class="clima">
+      <div class="clima-top"><h3>Lugar de operación</h3>${lugar ? `<small>${esc(lugar.nombre)}</small>` : ''}</div>
+      ${m ? `<img class="mapa-img" src="${esc(m.img)}" alt="Imagen georreferencial del lugar de operación">
+        <small class="suave" style="font-size:12px">Cargada por ${esc(nombreCorto(m.nombre))}${aFecha(m.en) ? ' · ' + cuando(aFecha(m.en)) : ''}</small>`
+        : '<p class="suave">Aún no hay imagen del lugar.</p>'}
+      ${enlaceMapa}
+      ${esLider() ? `<label class="boton-archivo">${m ? 'CAMBIAR IMAGEN DEL LUGAR' : 'AGREGAR IMAGEN DEL LUGAR'}<input type="file" accept="image/*" data-mapa="1" class="oculto"></label>` : ''}
+    </section>`;
+  } else if (enlaceMapa) {
+    mapa = `<p>${enlaceMapa}</p>`;
+  }
+  return clima + mapa;
+}
+
 function vistaEstado() {
   const l = S.llamado;
   if (!l) {
     return `<main>
       ${ficha()}
-      <div class="estado" style="background: var(--panel)"><b style="font-size:32px">SIN LLAMADOS ACTIVOS</b>
-      <small>Fase de preparación. Te avisaremos por radio 5-1 y por el grupo de WhatsApp.</small></div>
       ${avisos()}
       ${esLider() ? '<button class="principal" data-act="tab" data-v="abrir">ABRIR LLAMADO</button>' : ''}
-      ${vistaClima()}
       <div class="hueco"></div><button class="enlace" data-act="salir">Cerrar sesión</button>
     </main>`;
   }
@@ -499,8 +592,6 @@ function vistaEstado() {
       <p class="suave">Si la hora ya pasó hoy, se entiende que es mañana.</p>
       <button class="principal" data-act="horaExacta" ${S.ocupado ? 'disabled' : ''}>CONFIRMAR</button>
       <button class="enlace" data-act="paso" data-v="tiempo">Volver</button>`;
-  } else if (S.paso === 'eta') {
-    cuerpo = etaPregunta();
   } else if (r && S.paso !== 'cambiar') {
     const c = clasificar(r);
     const en = aFecha(r.en);
@@ -513,9 +604,7 @@ function vistaEstado() {
       const hasta = aFecha(r.hasta);
       cuerpo = `<div class="estado si"><b>DISPONIBLE</b>
         <span>${hasta ? 'Hasta ' + cuando(hasta) : 'Hasta nuevo aviso'}</span>
-        <small>${hasta ? 'Vence en ' + dur(hasta.getTime() - Date.now()) + ' · luego dejas de contar como disponible' : 'Sigues disponible hasta que cambies tu estado'}</small>
-        ${r.eta ? `<small>Llegada estimada al Cuartel: ${hhmm(aFecha(r.eta))}</small>` : ''}</div>`;
-      if (l.fase === 'movilizacion' && !r.eta) cuerpo += etaPregunta();
+        <small>${hasta ? 'Vence en ' + dur(hasta.getTime() - Date.now()) + ' · luego dejas de contar como disponible' : 'Sigues disponible hasta que cambies tu estado'}</small></div>`;
     }
     cuerpo = `<p class="suave">Registrado ${en ? 'a las ' + hhmm(en) : ''}</p>${cuerpo}
       <button class="contorno" data-act="paso" data-v="cambiar">CAMBIAR MI ESTADO</button>`;
@@ -526,20 +615,8 @@ function vistaEstado() {
       ${S.paso === 'cambiar' ? '<button class="enlace" data-act="paso" data-v="">Volver</button>' : ''}`;
   }
   return `${banda(l)}<main>${ficha()}${avisos()}${cuerpo}
-    ${l.fase !== 'movilizacion' ? '<p class="suave">Si la fase pasa a Movilización, te pediremos tu hora estimada de llegada al Cuartel General.</p>' : ''}
-    ${vistaClima()}
+    ${terreno(l)}
     <div class="hueco"></div><button class="enlace" data-act="salir">Cerrar sesión</button></main>`;
-}
-
-function etaPregunta() {
-  return `<div class="caja"><h3>¿En cuánto llegas al Cuartel General?</h3>
-    <p class="suave">Plazo máximo del procedimiento: 2 horas desde el aviso.</p>
-    <div class="opciones">
-      <button class="opcion" data-act="eta" data-v="30">30 min</button>
-      <button class="opcion" data-act="eta" data-v="60">1 h</button>
-      <button class="opcion" data-act="eta" data-v="90">1 h 30</button>
-      <button class="opcion" data-act="eta" data-v="120">2 h</button>
-    </div></div>`;
 }
 
 // --- Abrir llamado (Líder) ---
@@ -550,7 +627,7 @@ function vistaAbrir() {
   return `<main>
     <h3>Nuevo llamado</h3>
     ${S.llamado ? '<p class="aviso">Hay un llamado abierto. Al abrir uno nuevo, el anterior se cerrará.</p>' : ''}
-    <div><label>Fase</label>${seg('fase', FASES, 'f-')}</div>
+    <div><label>Fase</label>${seg('fase', FASES_APERTURA, 'f-')}</div>
     <div><label>Nivel</label>${seg('nivel', NIVELES)}</div>
     <div class="campo"><label for="desc">Descripción breve</label>
       <textarea id="desc" rows="3" data-bind="desc" placeholder="Ej.: Búsqueda de persona desaparecida, sector cordillerano.">${esc(S.f.desc)}</textarea></div>
@@ -565,14 +642,14 @@ function vistaAbrir() {
     ${avisos()}
     <button class="principal" data-act="abrirLlamado" ${S.ocupado ? 'disabled' : ''}>ABRIR LLAMADO</button>
     <p class="suave">Al abrir, se preparará el mensaje para el grupo de WhatsApp. El aviso por radio 5-1 se mantiene.</p>
-    <button class="enlace" data-act="tab" data-v="${S.llamado ? 'tablero' : 'estado'}">Cancelar</button>
+    <button class="enlace" data-act="tab" data-v="tablero">Cancelar</button>
   </main>`;
 }
 
 // --- Tablero (Líder) ---
 function filasTablero() {
   const ahora = Date.now();
-  return S.nomina.filter((n) => n.activo).map((n) => {
+  return integrantes().map((n) => {
     const r = S.respuestas[n.email];
     const c = clasificar(r, ahora);
     return { ...n, r, c };
@@ -608,9 +685,25 @@ function cordadasHtml(res, conNombres) {
   return `<label>Cordadas sugeridas (según perfiles disponibles)</label>${cajas || '<p class="suave">Aún no hay disponibles para armar una cordada.</p>'}${reserva}`;
 }
 
+// Tablero sin llamado activo: abrir llamado e informes de llamados cerrados.
+function vistaInicioLider() {
+  const filas = S.cerrados.map((c) => {
+    const a = aFecha(c.creadoEn); const z = aFecha(c.cerradoEn);
+    const nuevo = c.id === S.ultimoCerrado;
+    return `<li class="${nuevo ? 'destacado' : ''}"><div><div class="nom">${a ? cuando(a) : ''} · ${esc(NIVELES[c.nivel] || '')}</div>
+      <small>${esc(c.descripcion || '')}${a && z ? ' · duró ' + dur(z - a) : ''}</small></div>
+      <button class="${nuevo ? 'principal' : 'contorno'} chico" data-act="informe" data-v="${c.id}">INFORME</button></li>`;
+  }).join('');
+  return `<main>
+    ${avisos()}
+    <button class="principal" data-act="tab" data-v="abrir">ABRIR LLAMADO</button>
+    ${S.cerrados.length ? `<h3>Informes de llamados</h3><ul class="lista informes">${filas}</ul>` : ''}
+  </main>`;
+}
+
 function vistaTablero() {
   const l = S.llamado;
-  if (!l) return vistaAbrir();
+  if (!l) return vistaInicioLider();
   const filas = filasTablero();
   const k = contar(filas);
   const PILL = { si: ['p-si', 'DISPONIBLE'], vence: ['p-vence', 'VENCE PRONTO'], no: ['p-no', 'NO DISPONIBLE'], sr: ['p-sr', 'SIN RESPUESTA'], vencida: ['p-sr', 'VENCIDA'] };
@@ -619,17 +712,12 @@ function vistaTablero() {
     || (S.filtro === 'si' && (f.c === 'si' || f.c === 'vence'))
     || (S.filtro === 'no' && f.c === 'no')
     || (S.filtro === 'sr' && (f.c === 'sr' || f.c === 'vencida')));
-  lista.sort((a, b) => {
-    if (l.fase === 'movilizacion' && a.r?.eta && b.r?.eta) return aFecha(a.r.eta) - aFecha(b.r.eta);
-    return orden[a.c] - orden[b.c] || a.nombre.localeCompare(b.nombre, 'es');
-  });
+  lista.sort((a, b) => orden[a.c] - orden[b.c] || a.nombre.localeCompare(b.nombre, 'es'));
   const detalle = (f) => {
     if (!f.r) return '—';
     if (f.c === 'no') return 'resp. ' + (aFecha(f.r.en) ? hhmm(aFecha(f.r.en)) : '');
     const h = aFecha(f.r.hasta);
-    let t = f.c === 'vencida' ? 'venció ' + hhmm(h) : (h ? 'hasta ' + cuando(h) : 'hasta nuevo aviso');
-    if (f.r.eta) t += ' · llega ' + hhmm(aFecha(f.r.eta));
-    return t;
+    return f.c === 'vencida' ? 'venció ' + hhmm(h) : (h ? 'hasta ' + cuando(h) : 'hasta nuevo aviso');
   };
   const sinResp = filas.filter((f) => f.c === 'sr' || f.c === 'vencida');
   const fil = (id, txt) => `<button data-act="filtro" data-v="${id}" class="${S.filtro === id ? 'on' : ''}" aria-pressed="${S.filtro === id}">${txt}</button>`;
@@ -652,17 +740,18 @@ function vistaTablero() {
     </li>`).join('') || '<li><span class="suave">Nadie en este filtro.</span></li>'}</ul>
     <button class="contorno" data-act="compartir">COMPARTIR LLAMADO (WHATSAPP)</button>
     ${sinResp.length ? `<button class="contorno" data-act="recordar">RECORDAR A LOS ${sinResp.length} SIN RESPUESTA</button>` : ''}
+    ${terreno(l)}
     <label>Cambiar fase</label>
     <div class="dos">${otrasFases.map((f) => `<button class="${f === 'movilizacion' ? 'peligro' : 'neutro'}" data-act="fase" data-v="${f}" ${S.ocupado ? 'disabled' : ''}>PASAR A ${FASES[f]}</button>`).join('')}</div>
-    <div class="dos"><button class="neutro" data-act="tab" data-v="abrir">NUEVO LLAMADO</button>
-      <button class="neutro" data-act="cerrar" ${S.ocupado ? 'disabled' : ''}>CERRAR LLAMADO</button></div>
+    <button class="${l.fase === 'desmovilizacion' ? 'principal' : 'neutro'}" data-act="cerrar" ${S.ocupado ? 'disabled' : ''}>CERRAR LLAMADO</button>
+    <button class="enlace" data-act="tab" data-v="abrir">Abrir un llamado nuevo</button>
   </main>`;
 }
 
 // --- Resumen (Gerencia): solo totales ---
 function vistaResumen() {
   const l = S.llamado;
-  if (!l) return `<main><div class="estado" style="background: var(--panel)"><b style="font-size:32px">SIN LLAMADOS ACTIVOS</b><small>Fase de preparación.</small></div></main>`;
+  if (!l) return '<main></main>';
   const entradas = Object.values((S.resumen && S.resumen.r) || {});
   const ahora = Date.now();
   let si = 0, no = 0;
@@ -671,7 +760,7 @@ function vistaResumen() {
   entradas.forEach((e) => {
     const c = clasificar(e, ahora);
     if (c === 'si' || c === 'vence') {
-      si++; disp.push({ cat: e.c || null });
+      si++; disp.push({ cat: e.c || null, nombre: e.n || 'Integrante', hasta: aFecha(e.h) });
       const h = aFecha(e.h);
       [2, 6, 12].forEach((x) => { if (!h || h.getTime() > ahora + x * H) vig[x]++; });
     } else if (c === 'no') no++;
@@ -685,18 +774,21 @@ function vistaResumen() {
     <div class="barra" role="img" aria-label="${si} disponibles, ${no} no disponibles, ${sr} sin respuesta">
       <div style="flex:${si}; background: var(--verde)"></div><div style="flex:${no}; background: var(--rojo)"></div><div style="flex:${sr}; background:#3A3A3A"></div></div>
     ${cordadaHtml(si)}
-    ${cordadasHtml(armarCordadas(disp), false)}
+    ${cordadasHtml(armarCordadas(disp), true)}
     <label>Disponibles que siguen vigentes</label>
     <div class="tres">${[2, 6, 12].map((x) => `<div class="cont panel"><b>${vig[x]}</b><span>en ${x} h</span></div>`).join('')}</div>
-    <p class="suave">Se actualiza solo. El detalle por nombre lo ve el Líder de la Unidad.</p>
+    <label>Integrantes disponibles</label>
+    <ul class="lista">${disp.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map((d) => `<li>
+      <div><div class="nom">${esc(nombreCorto(d.nombre))}</div><small>${esc(d.cat ? CAT_NOMBRE[d.cat] || d.cat : 'Sin perfil de cordada')}</small></div>
+      <div class="der"><span class="pill p-si">DISPONIBLE</span><small>${d.hasta ? 'hasta ' + esc(cuando(d.hasta)) : 'hasta nuevo aviso'}</small></div></li>`).join('') || '<li><span class="suave">Aún no hay disponibles.</span></li>'}</ul>
   </main>`;
 }
 
 // --- Nómina (Líder/Administrador) ---
 function vistaNomina() {
-  const activos = S.nomina.filter((n) => n.activo).length;
+  const activos = integrantes().length;
   const opcCordada = (sel) => `<option value="">Sin asignar</option>${CATEGORIAS.map((c) => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}`;
-  const sinPerfil = S.nomina.filter((n) => n.activo && !n.cordada).length;
+  const sinPerfil = integrantes().filter((n) => !n.cordada).length;
   return `<main>
     <h3>Agregar integrante</h3>
     <div class="campo"><label for="nNombre">Nombre</label><input id="nNombre" list="nombres" data-bind="nNombre" value="${esc(S.f.nNombre)}"></div>
@@ -709,19 +801,95 @@ function vistaNomina() {
     <div class="campo"><label for="nCordada">Perfil de cordada</label><select id="nCordada" data-bind="nCordada">${opcCordada(S.f.nCordada)}</select></div>
     ${avisos()}
     <button class="principal" data-act="agregar" ${S.ocupado ? 'disabled' : ''}>AGREGAR</button>
-    <h3>Nómina (${activos} activos)</h3>
+    <h3>Nómina URAC (${activos} activos)</h3>
     ${sinPerfil ? `<p class="aviso">${sinPerfil} integrante(s) activos sin perfil de cordada: solo podrán ocupar el puesto de Apoyo.</p>` : ''}
     <ul class="miembros">${S.nomina.map((n, i) => `<li class="miembro">
       <div class="m-top">${avatar(n.email, n.nombre, 52)}
         <div><div class="nom" style="${n.activo ? '' : 'color: var(--texto-suave); text-decoration: line-through'}">${esc(n.nombre)}</div><small>${esc(n.cargo)} · ${esc(n.email)}</small></div></div>
       <div class="dos">
         <div class="campo"><label for="rol-${i}">Perfil en la app</label><select id="rol-${i}" data-act-change="rol" data-email="${esc(n.email)}">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${n.rol === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-        <div class="campo"><label for="cor-${i}">Perfil de cordada</label><select id="cor-${i}" data-act-change="cordada" data-email="${esc(n.email)}">${opcCordada(n.cordada || '')}</select></div>
+        ${n.rol === 'admin' ? '<p class="suave">Administrador del sistema: no integra la URAC ni cuenta en cordadas.</p>'
+          : `<div class="campo"><label for="cor-${i}">Perfil de cordada</label><select id="cor-${i}" data-act-change="cordada" data-email="${esc(n.email)}">${opcCordada(n.cordada || '')}</select></div>`}
       </div>
       <div class="dos">
         <label class="boton-archivo">${S.fotos[n.email] ? 'CAMBIAR FOTO' : 'AGREGAR FOTO'}<input type="file" accept="image/*" data-foto="${esc(n.email)}" class="oculto"></label>
         <button class="neutro" data-act="activo" data-email="${esc(n.email)}">${n.activo ? 'DESACTIVAR' : 'ACTIVAR'}</button>
       </div></li>`).join('')}</ul>
+  </main>`;
+}
+
+// --- Informe del llamado (Líder/Administrador) ---
+function describirEvento(e) {
+  const quien = esc(e.nombre || e.por || '');
+  switch (e.tipo) {
+    case 'apertura': return `<b>Apertura en FASE DE ${esc(FASES[e.fase] || e.fase)}</b> por ${quien}. ${esc(e.detalle)}`;
+    case 'fase': return `<b>Cambio de fase</b> (${esc(e.detalle)}) por ${quien}`;
+    case 'respuesta': return `${quien}: <b>${esc(e.detalle)}</b>`;
+    case 'mapa': return `${esc(e.detalle)} por ${quien}`;
+    case 'cierre': return `<b>${esc(e.detalle)}</b> por ${quien}`;
+    default: return `${esc(e.detalle)} · ${quien}`;
+  }
+}
+
+function vistaInforme() {
+  const I = S.informe;
+  if (!I || I.cargando) return '<main><p class="suave">Preparando informe…</p></main>';
+  const l = I.l;
+  const ini = aFecha(l.creadoEn); const fin = aFecha(l.cerradoEn);
+  const corte = fin ? fin.getTime() : Date.now();
+  const fecha = (d) => d ? d.toLocaleString('es-CL', { timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
+  const nombreDe = (email) => (S.nomina.find((n) => n.email === email) || {}).nombre || email;
+  // Fases y su duración, desde la bitácora.
+  const hitos = I.eventos.filter((e) => e.tipo === 'apertura' || e.tipo === 'fase').map((e) => ({ fase: e.fase, en: aFecha(e.en) }));
+  if (!hitos.length && ini) hitos.push({ fase: l.fase, en: ini });
+  const fases = hitos.map((h, i) => {
+    const hasta = i + 1 < hitos.length ? hitos[i + 1].en : fin;
+    return `<tr><td>${esc(FASES[h.fase] || h.fase)}</td><td>${fecha(h.en)}</td><td>${hasta && h.en ? dur(hasta - h.en) : '—'}</td></tr>`;
+  }).join('');
+  // Disponibilidad al cierre.
+  const filas = integrantes().map((n) => ({ ...n, r: I.respuestas[n.email], c: clasificar(I.respuestas[n.email], corte) }));
+  const k = contar(filas);
+  const EST = { si: 'Disponible', vence: 'Disponible', no: 'No disponible', sr: 'Sin respuesta', vencida: 'Disponibilidad vencida' };
+  const disponibles = filas.filter((f) => f.c === 'si' || f.c === 'vence')
+    .sort((a, b) => (aFecha(a.r.en)?.getTime() || 0) - (aFecha(b.r.en)?.getTime() || 0))
+    .map((f) => ({ email: f.email, nombre: f.nombre, cat: f.cordada || null }));
+  const cord = armarCordadas(disponibles);
+  const tablaCordadas = cord.cordadas.map((c) => `<p><b>Cordada ${c.nombre}</b> (${c.puestos.filter((p) => p.p).length}/${c.puestos.length})</p>
+    <table><tr><th>Puesto</th><th>Integrante</th></tr>${c.puestos.map((pu) => `<tr><td>${esc(pu.cat.nombre)}</td><td>${pu.p ? esc(pu.p.nombre) : '<b>FALTA</b>'}</td></tr>`).join('')}</table>`).join('')
+    || '<p>No hubo disponibles suficientes para armar una cordada.</p>';
+  const orden = { si: 0, vence: 0, no: 1, vencida: 2, sr: 3 };
+  const tablaPersonal = filas.sort((a, b) => orden[a.c] - orden[b.c] || a.nombre.localeCompare(b.nombre, 'es')).map((f) => {
+    const h = f.r && aFecha(f.r.hasta);
+    return `<tr><td>${esc(f.nombre)}</td><td>${esc(f.cordada ? CAT_NOMBRE[f.cordada] : '—')}</td><td>${EST[f.c]}${(f.c === 'si' || f.c === 'vence') ? (h ? ' hasta ' + esc(cuando(h)) : ' (hasta nuevo aviso)') : ''}</td><td>${f.r && aFecha(f.r.en) ? hhmm(aFecha(f.r.en)) : '—'}</td></tr>`;
+  }).join('');
+  const bitacora = I.eventos.map((e) => `<tr><td>${fecha(aFecha(e.en))}</td><td>${esc(FASES[e.fase] || '')}</td><td>${describirEvento(e)}</td></tr>`).join('')
+    || '<tr><td colspan="3">Este llamado no tiene bitácora registrada.</td></tr>';
+  return `<main>
+    <div class="no-print dos"><button class="principal" data-act="imprimir">IMPRIMIR / GUARDAR PDF</button><button class="neutro" data-act="tab" data-v="tablero">VOLVER</button></div>
+    <article class="informe">
+      <div class="inf-logos">${LOGOS}</div>
+      <h1>Informe de llamado · URAC</h1>
+      <p class="inf-sub">Unidad de Rescate Agreste Chena · Cuerpo de Bomberos de San Bernardo</p>
+      <table class="datos">
+        <tr><th>Nivel de activación</th><td>${esc(NIVELES[l.nivel] || l.nivel)}</td></tr>
+        <tr><th>Descripción</th><td>${esc(l.descripcion)}</td></tr>
+        <tr><th>Lugar</th><td>${l.lugar ? `${esc(l.lugar.nombre)} (${Number(l.lugar.lat).toFixed(4)}, ${Number(l.lugar.lon).toFixed(4)})` : '—'}</td></tr>
+        <tr><th>Apertura</th><td>${fecha(ini)} · ${esc(nombreDe(l.creadoPor))}</td></tr>
+        <tr><th>Cierre</th><td>${fecha(fin)} · ${esc(nombreDe(l.cerradoPor))}</td></tr>
+        <tr><th>Duración total</th><td>${ini && fin ? dur(fin - ini) : '—'}</td></tr>
+      </table>
+      <h2>Fases</h2>
+      <table><tr><th>Fase</th><th>Inicio</th><th>Duración</th></tr>${fases}</table>
+      <h2>Disponibilidad al cierre</h2>
+      <p>Disponibles: <b>${k.si}</b> · No disponibles: <b>${k.no}</b> · Sin respuesta o vencida: <b>${k.sr}</b> · Total integrantes: <b>${filas.length}</b></p>
+      <table><tr><th>Integrante</th><th>Perfil de cordada</th><th>Estado</th><th>Resp.</th></tr>${tablaPersonal}</table>
+      <h2>Cordadas al cierre</h2>
+      ${tablaCordadas}
+      ${I.mapa ? `<h2>Imagen del lugar</h2><img class="mapa-img" src="${esc(I.mapa.img)}" alt="Imagen georreferencial del lugar">` : ''}
+      <h2>Bitácora de movimientos</h2>
+      <table><tr><th>Fecha y hora</th><th>Fase</th><th>Movimiento</th></tr>${bitacora}</table>
+      <p class="inf-pie">Generado el ${fecha(I.generado)} por ${esc(S.perfil.nombre)}. Documento de apoyo para la Reunión Posterior al Incidente y el Informe Final del Incidente.</p>
+    </article>
   </main>`;
 }
 
@@ -741,7 +909,8 @@ function render() {
   else if (!S.perfil.activo) html = vistaInactivo();
   else {
     let vista;
-    if (S.tab === 'tablero' && esLider()) vista = vistaTablero();
+    if ((S.tab === 'tablero' || (S.tab === 'estado' && esAdmin())) && esLider()) vista = vistaTablero();
+    else if (S.tab === 'informe' && esLider()) vista = vistaInforme();
     else if (S.tab === 'abrir' && esLider()) vista = vistaAbrir();
     else if (S.tab === 'nomina' && esLider()) vista = vistaNomina();
     else if (S.tab === 'resumen' && esGerencia()) vista = vistaResumen();
@@ -773,6 +942,11 @@ $app.addEventListener('change', (e) => {
   if (t.dataset.actChange === 'cordada') {
     const email = t.dataset.email;
     accion(() => updateDoc(doc(db, 'nomina', email), { cordada: t.value || null }));
+  }
+  if (t.dataset.mapa) {
+    const archivo = t.files && t.files[0];
+    t.blur();
+    accion(() => subirMapa(archivo));
   }
   if (t.dataset.foto) {
     const email = t.dataset.foto; const archivo = t.files && t.files[0];
@@ -814,19 +988,19 @@ $app.addEventListener('click', (e) => {
     case 'noDisponible': accion(() => guardarRespuesta({ estado: 'no' })); break;
     case 'horas': accion(async () => {
       const h = Number(v);
-      await guardarRespuesta({ estado: 'si', hasta: h ? new Date(Date.now() + h * H) : null, eta: S.miResp?.eta ? aFecha(S.miResp.eta) : null });
+      await guardarRespuesta({ estado: 'si', hasta: h ? new Date(Date.now() + h * H) : null });
     }); break;
     case 'horaExacta': accion(async () => {
       if (!S.f.hora) throw new Error('Elige una hora.');
       const [hh, mm] = S.f.hora.split(':').map(Number);
       const d = new Date(); d.setHours(hh, mm, 0, 0);
       if (d.getTime() <= Date.now()) d.setTime(d.getTime() + 24 * H);
-      await guardarRespuesta({ estado: 'si', hasta: d, eta: S.miResp?.eta ? aFecha(S.miResp.eta) : null });
+      await guardarRespuesta({ estado: 'si', hasta: d });
     }); break;
-    case 'eta': accion(async () => {
-      const r = S.miResp;
-      await guardarRespuesta({ estado: 'si', hasta: aFecha(r?.hasta), eta: new Date(Date.now() + Number(v) * 60000) });
+    case 'informe': accion(async () => {
+      try { await cargarInforme(v); } catch (err) { S.informe = null; S.tab = 'tablero'; throw err; }
     }); break;
+    case 'imprimir': window.print(); break;
     case 'abrirLlamado': accion(abrirLlamado); break;
     case 'fase': accion(() => cambiarFase(v)); break;
     case 'cerrar': accion(cerrarLlamado); break;
