@@ -317,9 +317,12 @@ function horaDesde(valor) {
   return d;
 }
 
-function mensajeLlamado(l) {
-  const t = aFecha(l.creadoEn) || new Date();
-  return `URAC · FASE DE ${FASES[l.fase]} (${NIVELES[l.nivel]}) · ${hhmm(t)}\n${l.descripcion}\nReporta tu disponibilidad aquí: ${linkApp()}`;
+function mensajeLlamado(l, cambioFase = false) {
+  const t = cambioFase ? new Date() : (aFecha(l.creadoEn) || new Date());
+  const pie = cambioFase
+    ? `Si ya reportaste tu disponibilidad, se mantiene. Si no lo has hecho o cambió, actualízala aquí: ${linkApp()}`
+    : `Reporta tu disponibilidad aquí: ${linkApp()}`;
+  return `URAC · FASE DE ${FASES[l.fase]} (${NIVELES[l.nivel]}) · ${hhmm(t)}\n${l.descripcion}\n${pie}`;
 }
 
 async function abrirLlamado() {
@@ -355,7 +358,7 @@ async function cambiarFase(fase) {
   b.update(doc(db, 'llamados', l.id), cambios);
   evento(b, l.id, 'fase', fase, `De ${FASES[l.fase]} a ${FASES[fase]}`);
   await b.commit();
-  abrirWhatsApp(mensajeLlamado({ ...l, fase }));
+  abrirWhatsApp(mensajeLlamado({ ...l, fase }, true));
 }
 
 async function cerrarLlamado() {
@@ -677,7 +680,7 @@ function vistaEstado() {
         <span>${hasta ? 'Hasta ' + cuando(hasta) : 'Hasta nuevo aviso'}</span>
         <small>${hasta ? 'Vence en ' + dur(hasta.getTime() - Date.now()) + ' · luego dejas de contar como disponible' : 'Sigues disponible hasta que cambies tu estado'}</small></div>`;
     }
-    cuerpo = `<p class="suave">Registrado ${en ? 'a las ' + hhmm(en) : ''}</p>${cuerpo}
+    cuerpo = `<p class="suave">Registrado ${en ? 'a las ' + hhmm(en) : ''} · se mantiene aunque cambie la fase</p>${cuerpo}
       <button class="contorno" data-act="paso" data-v="cambiar">CAMBIAR MI ESTADO</button>`;
   } else {
     cuerpo = `<h3>¿Estás disponible?</h3>
