@@ -309,7 +309,7 @@ async function abrirLlamado() {
   if (!desc) { S.err = 'Escribe una descripción breve.'; return; }
   const ahora = new Date();
   // Solo puede haber un llamado activo a la vez.
-  if (S.llamado) throw new Error('Ya hay un llamado activo. Ciérralo antes de abrir otro.');
+  if (S.llamado) throw new Error('Ya hay un incidente activo. Ciérralo antes de reportar otro.');
   const total = integrantes().length;
   const b = writeBatch(db);
   const ref = doc(collection(db, 'llamados'));
@@ -330,7 +330,7 @@ async function abrirLlamado() {
 async function cambiarFase(fase) {
   const l = S.llamado;
   if (!l || l.fase === fase) return;
-  if (!confirm(`¿Pasar el llamado a FASE DE ${FASES[fase]}?`)) return;
+  if (!confirm(`¿Pasar el incidente a FASE DE ${FASES[fase]}?`)) return;
   const cambios = { fase, faseEn: serverTimestamp() };
   if (fase === 'alerta' && l.nivel === 'sno' && !l.plazoSNO) cambios.plazoSNO = Timestamp.fromDate(new Date(Date.now() + PLAZO_SNO_H * H));
   const b = writeBatch(db);
@@ -341,14 +341,14 @@ async function cambiarFase(fase) {
 }
 
 async function cerrarLlamado() {
-  if (!confirm('¿Cerrar el llamado? Los integrantes dejarán de verlo.')) return;
+  if (!confirm('¿Cerrar el incidente? Los integrantes dejarán de verlo.')) return;
   const l = S.llamado;
   const b = writeBatch(db);
   b.update(doc(db, 'llamados', l.id), { abierto: false, cerradoEn: serverTimestamp(), cerradoPor: S.email });
-  evento(b, l.id, 'cierre', l.fase, 'Llamado cerrado');
+  evento(b, l.id, 'cierre', l.fase, 'Incidente cerrado');
   await b.commit();
   S.ultimoCerrado = l.id; S.tab = 'tablero';
-  S.msg = 'Llamado cerrado. Ya puedes generar el informe.';
+  S.msg = 'Incidente cerrado. Ya puedes generar el informe.';
 }
 
 // Imagen georreferencial del lugar (captura de mapa, croquis, etc.). Se reduce para caber en la base de datos.
@@ -380,7 +380,7 @@ async function eliminarInforme(id) {
   const c = S.cerrados.find((x) => x.id === id);
   if (!c) return;
   const a = aFecha(c.creadoEn);
-  if (!confirm(`¿Eliminar el informe del llamado del ${a ? cuando(a) : ''}?\n\nSe borrará también su bitácora, respuestas e imagen. No se puede deshacer.`)) return;
+  if (!confirm(`¿Eliminar el informe del incidente del ${a ? cuando(a) : ''}?\n\nSe borrará también su bitácora, respuestas e imagen. No se puede deshacer.`)) return;
   const refs = [];
   for (const sub of ['eventos', 'respuestas', 'resumen', 'adjuntos']) {
     const qs = await getDocs(collection(db, 'llamados', id, sub));
@@ -646,7 +646,7 @@ function vistaEstado() {
     const c = clasificar(r);
     const en = aFecha(r.en);
     if (c === 'no') {
-      cuerpo = `<div class="estado no"><b>NO DISPONIBLE</b><small>El Líder verá que no puedes concurrir en este llamado.</small></div>`;
+      cuerpo = `<div class="estado no"><b>NO DISPONIBLE</b><small>El Líder verá que no puedes concurrir en este incidente.</small></div>`;
     } else if (c === 'vencida') {
       cuerpo = `<div class="estado" style="background: var(--gris)"><b>DISPONIBILIDAD VENCIDA</b>
         <small>Venció a las ${hhmm(aFecha(r.hasta))}. Actualiza tu estado.</small></div>`;
@@ -751,7 +751,7 @@ function vistaInicioLider() {
   return `<main>
     ${avisos()}
     <button class="principal" data-act="tab" data-v="abrir">REPORTAR FASE</button>
-    ${S.cerrados.length ? `<h3>Informes de llamados</h3><ul class="lista informes">${filas}</ul>` : ''}
+    ${S.cerrados.length ? `<h3>Informes de incidentes</h3><ul class="lista informes">${filas}</ul>` : ''}
   </main>`;
 }
 
@@ -794,12 +794,12 @@ function vistaTablero() {
       <div class="der"><span class="pill ${PILL[f.c][0]}">${PILL[f.c][1]}</span><small>${esc(detalle(f))}</small>
         <button class="editar" data-act="manualPara" data-v="${esc(f.email)}" aria-label="Ingresar o editar disponibilidad de ${esc(f.nombre)}">EDITAR</button></div>
     </li>`).join('') || '<li><span class="suave">Nadie en este filtro.</span></li>'}</ul>
-    <button class="contorno" data-act="compartir">COMPARTIR LLAMADO (WHATSAPP)</button>
+    <button class="contorno" data-act="compartir">COMPARTIR INCIDENTE (WHATSAPP)</button>
     ${sinResp.length ? `<button class="contorno" data-act="recordar">RECORDAR A SIN RESPUESTA (${sinResp.length})</button>` : ''}
     ${terreno(l)}
     <label>Cambiar fase</label>
     <div class="dos">${otrasFases.map((f) => `<button class="${f === 'movilizacion' ? 'peligro' : 'neutro'}" data-act="fase" data-v="${f}" ${S.ocupado ? 'disabled' : ''}>PASAR A ${FASES[f]}</button>`).join('')}</div>
-    <button class="${l.fase === 'desmovilizacion' ? 'principal' : 'neutro'}" data-act="cerrar" ${S.ocupado ? 'disabled' : ''}>CERRAR LLAMADO</button>
+    <button class="${l.fase === 'desmovilizacion' ? 'principal' : 'neutro'}" data-act="cerrar" ${S.ocupado ? 'disabled' : ''}>CERRAR INCIDENTE</button>
     <button class="contorno" data-act="informe" data-v="${l.id}">GENERAR INFORME (A LA FECHA)</button>
   </main>`;
 }
@@ -844,7 +844,7 @@ function ingresoManual(filas) {
 // --- Resumen (Gerencia): solo totales ---
 function vistaResumen() {
   const l = S.llamado;
-  if (!l) return puedeInforme() && S.cerrados.length ? `<main><h3>Informes de llamados</h3><ul class="lista informes">${listaInformes()}</ul></main>` : '<main></main>';
+  if (!l) return puedeInforme() && S.cerrados.length ? `<main><h3>Informes de incidentes</h3><ul class="lista informes">${listaInformes()}</ul></main>` : '<main></main>';
   const entradas = Object.values((S.resumen && S.resumen.r) || {});
   const ahora = Date.now();
   let si = 0, no = 0;
@@ -958,12 +958,12 @@ function vistaInforme() {
     return `<tr><td>${esc(f.nombre)}</td><td>${esc(f.cordada ? CAT_NOMBRE[f.cordada] : '—')}</td><td>${EST[f.c]}${(f.c === 'si' || f.c === 'vence') ? (h ? ' hasta ' + esc(cuando(h)) : ' (hasta nuevo aviso)') : ''}</td><td>${f.r && aFecha(f.r.en) ? hhmm(aFecha(f.r.en)) : '—'}</td></tr>`;
   }).join('');
   const bitacora = I.eventos.map((e) => `<tr><td>${fecha(aFecha(e.en))}</td><td>${esc(FASES[e.fase] || '')}</td><td>${describirEvento(e)}</td></tr>`).join('')
-    || '<tr><td colspan="3">Este llamado no tiene bitácora registrada.</td></tr>';
+    || '<tr><td colspan="3">Este incidente no tiene bitácora registrada.</td></tr>';
   return `<main>
     <div class="no-print dos"><button class="principal" data-act="imprimir">IMPRIMIR / GUARDAR PDF</button><button class="neutro" data-act="tab" data-v="${esc(S.tabPrevio || 'tablero')}">VOLVER</button></div>
     <article class="informe">
       <div class="inf-logos">${LOGOS}</div>
-      <h1>Informe de llamado · URAC${fin ? '' : ' (preliminar)'}</h1>
+      <h1>Informe de incidente · URAC${fin ? '' : ' (preliminar)'}</h1>
       <p class="inf-sub">Unidad de Rescate Agreste Chena · Cuerpo de Bomberos de San Bernardo</p>
       <table class="datos">
         <tr><th>Nivel de activación</th><td>${esc(NIVELES[l.nivel] || l.nivel)}</td></tr>
