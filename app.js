@@ -309,7 +309,7 @@ async function abrirLlamado() {
   if (!desc) { S.err = 'Escribe una descripción breve.'; return; }
   const ahora = new Date();
   // Solo puede haber un llamado activo a la vez.
-  if (S.llamado) throw new Error('Ya hay un incidente activo. Ciérralo antes de reportar otro.');
+  if (S.llamado) throw new Error('Ya hay un incidente activo. Ciérralo antes de abrir otro.');
   const total = integrantes().length;
   const b = writeBatch(db);
   const ref = doc(collection(db, 'llamados'));
@@ -323,7 +323,7 @@ async function abrirLlamado() {
   evento(b, ref.id, 'apertura', S.f.fase, `Nivel ${NIVELES[S.f.nivel]} · ${lugar.nombre} · ${desc}`);
   await b.commit();
   S.f.desc = ''; S.f.lugar = null; S.f.lugarQ = ''; S.lugares = []; S.tab = 'tablero';
-  S.msg = 'Fase reportada. Compártela ahora en el grupo de WhatsApp.';
+  S.msg = 'Incidente abierto. Compártelo ahora en el grupo de WhatsApp.';
   abrirWhatsApp(mensajeLlamado({ ...datos, creadoEn: ahora }));
 }
 
@@ -619,7 +619,7 @@ function vistaEstado() {
     return `<main>
       ${ficha()}
       ${avisos()}
-      ${esLider() ? '<button class="principal" data-act="tab" data-v="abrir">REPORTAR FASE</button>' : ''}
+      ${esLider() ? '<button class="principal" data-act="tab" data-v="abrir">ABRIR INCIDENTE</button>' : ''}
       <div class="hueco"></div>
     </main>`;
   }
@@ -676,7 +676,7 @@ function vistaAbrir() {
     `<button data-act="set" data-k="${campo}" data-v="${k}" class="${S.f[campo] === k ? 'on' : ''} ${clase ? clase + k : ''}" aria-pressed="${S.f[campo] === k}">${v}</button>`).join('')}</div>`;
   const plazo = S.f.nivel === 'sno' && S.f.fase === 'alerta';
   return `<main>
-    <h3>Reportar fase</h3>
+    <h3>Abrir incidente</h3>
     <div><label>Fase</label>${seg('fase', FASES_APERTURA, 'f-')}</div>
     <div><label>Nivel</label>${seg('nivel', NIVELES)}</div>
     <div class="campo"><label for="desc">Descripción breve</label>
@@ -690,7 +690,7 @@ function vistaAbrir() {
     <p class="suave">Activación Local: clima de 24 h. Regional o SNO: clima de 5 días.</p>
     ${plazo ? `<p class="suave">Se marcará el plazo de ${PLAZO_SNO_H} h para reportar disponibilidad al SNO.</p>` : ''}
     ${avisos()}
-    <button class="principal" data-act="abrirLlamado" ${S.ocupado ? 'disabled' : ''}>REPORTAR FASE</button>
+    <button class="principal" data-act="abrirLlamado" ${S.ocupado ? 'disabled' : ''}>ABRIR INCIDENTE</button>
     <button class="enlace" data-act="tab" data-v="tablero">Cancelar</button>
   </main>`;
 }
@@ -750,7 +750,7 @@ function vistaInicioLider() {
   const filas = listaInformes();
   return `<main>
     ${avisos()}
-    <button class="principal" data-act="tab" data-v="abrir">REPORTAR FASE</button>
+    <button class="principal" data-act="tab" data-v="abrir">ABRIR INCIDENTE</button>
     ${S.cerrados.length ? `<h3>Informes de incidentes</h3><ul class="lista informes">${filas}</ul>` : ''}
   </main>`;
 }
