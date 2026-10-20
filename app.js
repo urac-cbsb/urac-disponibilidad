@@ -982,7 +982,7 @@ function vistaNomina() {
   const sinPerfil = integrantes().filter((n) => !n.cordada).length;
   return `<main>
     ${avisos()}
-    ${vistaImportar()}
+    ${esAdmin() ? vistaImportar() : ''}
     <h3>Agregar integrante</h3>
     <div class="campo"><label for="nNombre">Nombre</label><input id="nNombre" list="nombres" data-bind="nNombre" value="${esc(S.f.nNombre)}"></div>
     <datalist id="nombres">${NOMBRES.filter((n) => !S.nomina.some((x) => x.nombre === n)).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
@@ -1242,9 +1242,9 @@ $app.addEventListener('click', (e) => {
       }
       break;
     }
-    case 'impRevisar': accion(async () => revisarImportacion()); break;
-    case 'impAgregar': accion(importarNuevos); break;
-    case 'impCambiar': accion(() => cambiarCorreo(Number(v))); break;
+    case 'impRevisar': if (esAdmin()) accion(async () => revisarImportacion()); break;
+    case 'impAgregar': if (esAdmin()) accion(importarNuevos); break;
+    case 'impCambiar': if (esAdmin()) accion(() => cambiarCorreo(Number(v))); break;
     case 'eliminarUsuario': {
       const n = S.nomina.find((x) => x.email === b.dataset.email);
       if (!n || n.email === S.email) break;
