@@ -646,7 +646,6 @@ function vistaAbrir() {
     ${plazo ? `<p class="suave">Se marcará el plazo de ${PLAZO_SNO_H} h para reportar disponibilidad al SNO.</p>` : ''}
     ${avisos()}
     <button class="principal" data-act="abrirLlamado" ${S.ocupado ? 'disabled' : ''}>ABRIR LLAMADO</button>
-    <p class="suave">Al abrir, se preparará el mensaje para el grupo de WhatsApp. El aviso por radio 5-1 se mantiene.</p>
     <button class="enlace" data-act="tab" data-v="tablero">Cancelar</button>
   </main>`;
 }
