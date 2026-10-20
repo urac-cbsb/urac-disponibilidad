@@ -256,3 +256,9 @@ ol.miembros-cordada .per { display: flex; align-items: center; gap: 8px; font-we
 /* Puesto de Comando */
 .cordada-box.pc { border-color: var(--amarillo); }
 .cordada-box.pc .per { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* Importar nómina */
+details.importar { border: 1px dashed var(--borde); padding: 0 12px; }
+details.importar[open] { padding-bottom: 12px; }
+details.importar > summary { min-height: 52px; display: flex; align-items: center; font-family: var(--display); font-weight: 700; font-size: 18px; color: var(--amarillo); cursor: pointer; }
+details.importar > * + * { margin-top: 10px; }

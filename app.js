@@ -41,7 +41,8 @@ const S = {
   llamado: null, miResp: null, respuestas: {}, nomina: [], resumen: null, fotos: {},
   clima: { clave: '', datos: null, err: '', cargando: false, en: 0 }, lugares: [],
   mapa: null, cerrados: [], ultimoCerrado: null, informe: null, manual: { email: '', paso: null },
-  f: { email: '', clave: '', nombre: '', horaManual: '', fase: 'alerta', nivel: 'local', desc: '', hora: '', lugarQ: '', lugar: null,
+  imp: null,
+  f: { email: '', clave: '', nombre: '', horaManual: '', impTexto: '', fase: 'alerta', nivel: 'local', desc: '', hora: '', lugarQ: '', lugar: null,
        nEmail: '', nNombre: '', nCargo: 'Operador de Rescate', nRol: 'rescatista', nCordada: '' },
   msg: '', err: '', ocupado: false
 };
@@ -430,6 +431,75 @@ async function cargarInforme(id) {
   const respuestas = {}; rs.forEach((d) => { respuestas[d.id] = d.data(); });
   const eventos = []; evs.forEach((d) => eventos.push(d.data()));
   S.informe = { cargando: false, l: { id, ...ls.data() }, eventos, respuestas, mapa: ms.exists() ? ms.data() : null, generado: new Date() };
+}
+
+// ---------- Importar nómina (pegar lista: Nombres;Apellidos;Correo, una persona por línea) ----------
+function tituloNombre(t) {
+  return String(t || '').trim().replace(/\s+/g, ' ').toLowerCase().split(' ')
+    .map((w) => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+}
+function claveNombre(n) {
+  const t = String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/\s+/).filter(Boolean);
+  return t.length >= 3 ? `${t[0]} ${t.slice(-2).join(' ')}` : t.join(' ');
+}
+function revisarImportacion() {
+  const lineas = S.f.impTexto.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lineas.length) throw new Error('Pega la lista primero.');
+  const vistos = new Set();
+  S.imp = lineas.map((l) => {
+    const partes = l.split(/\t|;/).map((x) => x.trim());
+    if (partes.length < 3) return { linea: l, estado: 'error', motivo: 'Faltan datos (se esperan Nombres;Apellidos;Correo)' };
+    const nombre = tituloNombre(partes[0] + ' ' + partes[1]);
+    const email = partes[2].toLowerCase();
+    if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email)) return { linea: l, nombre, email, estado: 'error', motivo: 'Correo no válido (revisa tildes o espacios)' };
+    if (vistos.has(email)) return { linea: l, nombre, email, estado: 'error', motivo: 'Correo repetido en la lista' };
+    vistos.add(email);
+    if (S.nomina.some((n) => n.email === email)) return { nombre, email, estado: 'mismo' };
+    const previo = S.nomina.find((n) => claveNombre(n.nombre) === claveNombre(nombre));
+    if (previo) return { nombre, email, estado: 'otroCorreo', previo: previo.email, previoNombre: previo.nombre };
+    return { nombre, email, estado: 'nuevo' };
+  });
+}
+async function importarNuevos() {
+  const nuevos = (S.imp || []).filter((x) => x.estado === 'nuevo');
+  if (!nuevos.length) throw new Error('No hay integrantes nuevos para agregar.');
+  for (let i = 0; i < nuevos.length; i += 400) {
+    const b = writeBatch(db);
+    nuevos.slice(i, i + 400).forEach((x) => b.set(doc(db, 'nomina', x.email), { nombre: x.nombre, cargo: 'Operador de Rescate', rol: 'rescatista', cordada: null, activo: true }));
+    await b.commit();
+  }
+  nuevos.forEach((x) => { x.estado = 'agregado'; });
+  S.msg = `${nuevos.length} integrante(s) agregados como Rescatista · Operador de Rescate.`;
+}
+// Cambia el correo de un integrante que ya existía, manteniendo su nombre, función, perfil y foto.
+async function cambiarCorreo(idx) {
+  const x = S.imp[idx];
+  const n = S.nomina.find((m) => m.email === x.previo);
+  if (!n) throw new Error('No se encontró la ficha anterior.');
+  if (!confirm(`¿Cambiar el correo de ${n.nombre}?\n\n${n.email}  →  ${x.email}\n\nSe mantienen su función, perfil y foto. Deberá crear su cuenta con el correo nuevo.`)) return;
+  const b = writeBatch(db);
+  b.set(doc(db, 'nomina', x.email), { nombre: n.nombre, cargo: n.cargo, rol: rolSel(n.rol), cordada: n.cordada || null, activo: true });
+  b.delete(doc(db, 'nomina', n.email));
+  if (S.fotos[n.email]) { b.set(doc(db, 'fotos', x.email), { img: S.fotos[n.email] }); b.delete(doc(db, 'fotos', n.email)); }
+  await b.commit();
+  x.estado = 'cambiado';
+  S.msg = `Correo de ${n.nombre} actualizado.`;
+}
+function vistaImportar() {
+  const I = S.imp;
+  const ETQ = { nuevo: ['p-si', 'NUEVO'], mismo: ['p-sr', 'YA ESTÁ'], otroCorreo: ['p-vence', 'OTRO CORREO'], error: ['p-no', 'REVISAR'], agregado: ['p-si', 'AGREGADO'], cambiado: ['p-si', 'ACTUALIZADO'] };
+  const n = I ? I.filter((x) => x.estado === 'nuevo').length : 0;
+  const lista = I ? `<ul class="lista">${I.map((x, i) => `<li>
+      <div><div class="nom">${esc(x.nombre || x.linea)}</div><small>${esc(x.email || '')}${x.motivo ? ' · ' + esc(x.motivo) : ''}${x.estado === 'otroCorreo' ? ` · En la nómina como ${esc(x.previoNombre)} (${esc(x.previo)})` : ''}</small></div>
+      <div class="der"><span class="pill ${ETQ[x.estado][0]}">${ETQ[x.estado][1]}</span>
+      ${x.estado === 'otroCorreo' ? `<button class="editar" data-act="impCambiar" data-v="${i}">USAR ESTE CORREO</button>` : ''}</div></li>`).join('')}</ul>
+    ${n ? `<button class="principal" data-act="impAgregar" ${S.ocupado ? 'disabled' : ''}>AGREGAR ${n} NUEVO(S)</button>` : ''}` : '';
+  return `<details class="importar" ${I ? 'open' : ''}><summary>IMPORTAR LISTA DE INTEGRANTES</summary>
+    <p class="suave">Pega una persona por línea: <b>Nombres;Apellidos;Correo</b>. Se agregan como Rescatista, función Operador de Rescate y sin perfil de cordada. Los que ya están no se modifican.</p>
+    <div class="campo"><label for="impTexto">Lista</label><textarea id="impTexto" rows="6" data-bind="impTexto">${esc(S.f.impTexto)}</textarea></div>
+    <button class="neutro" data-act="impRevisar" ${S.ocupado ? 'disabled' : ''}>REVISAR LISTA</button>
+    ${lista}
+  </details>`;
 }
 
 async function guardarIntegrante() {
@@ -911,6 +981,8 @@ function vistaNomina() {
   const opcCordada = (sel) => `<option value="">Sin asignar</option>${CATEGORIAS.map((c) => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}`;
   const sinPerfil = integrantes().filter((n) => !n.cordada).length;
   return `<main>
+    ${avisos()}
+    ${vistaImportar()}
     <h3>Agregar integrante</h3>
     <div class="campo"><label for="nNombre">Nombre</label><input id="nNombre" list="nombres" data-bind="nNombre" value="${esc(S.f.nNombre)}"></div>
     <datalist id="nombres">${NOMBRES.filter((n) => !S.nomina.some((x) => x.nombre === n)).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
@@ -1171,6 +1243,9 @@ $app.addEventListener('click', (e) => {
       }
       break;
     }
+    case 'impRevisar': accion(async () => revisarImportacion()); break;
+    case 'impAgregar': accion(importarNuevos); break;
+    case 'impCambiar': accion(() => cambiarCorreo(Number(v))); break;
     case 'eliminarUsuario': {
       const n = S.nomina.find((x) => x.email === b.dataset.email);
       if (!n || n.email === S.email) break;
