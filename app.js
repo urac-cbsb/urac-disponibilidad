@@ -71,6 +71,8 @@ const esAdmin = () => S.perfil && S.perfil.rol === 'admin';
 // Informe: Líder, Administrador, Jefe de Operaciones y Jefe de Planificación, en cualquier etapa.
 const CARGOS_INFORME = ['Jefe de Operaciones', 'Jefe de Planificación'];
 const puedeInforme = () => esLider() || (S.perfil && CARGOS_INFORME.includes(S.perfil.cargo));
+// Edición de la Nómina: solo el Administrador y el Líder de Unidad (no el Jefe de Operaciones).
+const puedeEditarNomina = () => esAdmin() || (esLider() && S.perfil.cargo === 'Líder de Unidad');
 const integrantes = () => S.nomina.filter((n) => n.activo && n.rol !== 'admin');
 
 // ---------- Utilidades ----------
@@ -434,7 +436,7 @@ async function guardarIntegrante() {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { S.err = 'Escribe un correo válido.'; return; }
   if (!nombre) { S.err = 'Escribe el nombre.'; return; }
   const ocupado = cargoOcupado(S.f.nCargo, email);
-  if (ocupado) { S.err = `El cargo ${S.f.nCargo} ya lo tiene ${ocupado.nombre}. Cámbiale el cargo primero.`; return; }
+  if (ocupado) { S.err = `La función ${S.f.nCargo} ya la tiene ${ocupado.nombre}. Cámbiale la función primero.`; return; }
   const b = writeBatch(db);
   b.set(doc(db, 'nomina', email), { nombre, cargo: S.f.nCargo, rol: S.f.nRol, cordada: S.f.nCordada || null, activo: true });
   await b.commit();
@@ -484,6 +486,7 @@ function encabezado() {
 
 function tabsDisponibles() {
   if (esAdmin()) return [{ id: 'tablero', txt: 'Panel' }, { id: 'nomina', txt: 'Nómina' }];
+  if (esLider() && !puedeEditarNomina()) return [{ id: 'estado', txt: 'Mi estado' }, { id: 'tablero', txt: 'Panel' }];
   const t = [{ id: 'estado', txt: 'Mi estado' }];
   if (esLider()) t.push({ id: 'tablero', txt: 'Panel' }, { id: 'nomina', txt: 'Nómina' });
   else if (esGerencia()) t.push({ id: 'resumen', txt: 'Resumen' });
@@ -746,7 +749,7 @@ function puestoComandoHtml(miembros, conFoto) {
     return `<li><span class="cat">${esc(cargo)}</span><span class="per">${conFoto ? avatar(m.email, m.nombre, 28) : ''}<span>${esc(nombreCorto(m.nombre))}</span>
       <span class="pill ${est[0]}">${est[1]}</span></span></li>`;
   }).join('');
-  return `<div class="cordada-box pc"><div class="cb-top"><b>PUESTO DE COMANDO</b><span class="pill ${disp ? 'p-si' : 'p-sr'}">${disp}/${CARGOS_PUESTO_COMANDO.length}</span></div>
+  return `<div class="cordada-box pc"><div class="cb-top"><b>GERENCIA</b><span class="pill ${disp ? 'p-si' : 'p-sr'}">${disp}/${CARGOS_PUESTO_COMANDO.length}</span></div>
     <ul class="puestos">${filas}</ul></div>`;
 }
 
@@ -911,20 +914,20 @@ function vistaNomina() {
     <datalist id="nombres">${NOMBRES.filter((n) => !S.nomina.some((x) => x.nombre === n)).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
     <div class="campo"><label for="nEmail">Correo (con el que creará su cuenta)</label><input id="nEmail" type="email" inputmode="email" data-bind="nEmail" value="${esc(S.f.nEmail)}"></div>
     <div class="dos">
-      <div class="campo"><label for="nCargo">Cargo</label><select id="nCargo" data-bind="nCargo">${CARGOS.map((c) => `<option ${S.f.nCargo === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+      <div class="campo"><label for="nCargo">Función</label><select id="nCargo" data-bind="nCargo">${CARGOS.map((c) => `<option ${S.f.nCargo === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
       <div class="campo"><label for="nRol">Perfil en la app</label><select id="nRol" data-bind="nRol">${Object.entries(ROLES).map(([k, v]) => `<option value="${k}" ${S.f.nRol === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
     </div>
-    <p class="suave">El acceso de Gerencia se asigna solo según el cargo (jefes, Líder Alfa, Líder Bravo y LUMED). Los cargos de mando no se pueden repetir.</p>
+    <p class="suave">El acceso de Gerencia se asigna solo según la función (jefes, Líder Alfa, Líder Bravo y LUMED). Las funciones de mando no se pueden repetir.</p>
     <div class="campo"><label for="nCordada">Perfil de cordada</label><select id="nCordada" data-bind="nCordada">${opcCordada(S.f.nCordada)}</select></div>
     ${avisos()}
     <button class="principal" data-act="agregar" ${S.ocupado ? 'disabled' : ''}>AGREGAR</button>
     <h3>Nómina URAC (${activos} activos)</h3>
-    ${sinPerfil ? `<p class="aviso">${sinPerfil} integrante(s) activos sin perfil de cordada: solo podrán ocupar el puesto de Apoyo.</p>` : ''}
+    ${sinPerfil ? `<p class="aviso">${sinPerfil} integrante(s) activos sin perfil de cordada: igual entran a las cordadas por orden de disponibilidad.</p>` : ''}
     <ul class="miembros">${S.nomina.map((n, i) => `<li class="miembro">
       <div class="m-top">${avatar(n.email, n.nombre, 52)}
         <div><div class="nom" style="${n.activo ? '' : 'color: var(--texto-suave); text-decoration: line-through'}">${esc(n.nombre)}</div><small>${esc(n.cargo)} · ${esc(etiquetaPerfil(n))} · ${esc(n.email)}</small></div></div>
       <div class="dos">
-        <div class="campo"><label for="car-${i}">Cargo</label><select id="car-${i}" data-act-change="cargo" data-email="${esc(n.email)}">${(CARGOS.includes(n.cargo) ? CARGOS : [n.cargo, ...CARGOS]).map((c) => `<option ${n.cargo === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+        <div class="campo"><label for="car-${i}">Función</label><select id="car-${i}" data-act-change="cargo" data-email="${esc(n.email)}">${(CARGOS.includes(n.cargo) ? CARGOS : [n.cargo, ...CARGOS]).map((c) => `<option ${n.cargo === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
         <button class="neutro" style="align-self:end" data-act="editarNombre" data-email="${esc(n.email)}">EDITAR NOMBRE</button>
       </div>
       <div class="dos">
@@ -934,7 +937,7 @@ function vistaNomina() {
       </div>
       <div class="dos">
         <label class="boton-archivo">${S.fotos[n.email] ? 'CAMBIAR FOTO' : 'AGREGAR FOTO'}<input type="file" accept="image/*" data-foto="${esc(n.email)}" class="oculto"></label>
-        <button class="neutro" data-act="activo" data-email="${esc(n.email)}">${n.activo ? 'DESACTIVAR' : 'ACTIVAR'}</button>
+        ${n.email === S.email ? '<span></span>' : `<button class="eliminar" style="min-height:50px" data-act="eliminarUsuario" data-email="${esc(n.email)}">ELIMINAR</button>`}
       </div></li>`).join('')}</ul>
   </main>`;
 }
@@ -1008,8 +1011,8 @@ function vistaInforme() {
       <h2>Disponibilidad ${fin ? 'al cierre' : 'al momento del informe'}</h2>
       <p>Disponibles: <b>${k.si}</b> · No disponibles: <b>${k.no}</b> · Sin respuesta o vencida: <b>${k.sr}</b> · Total integrantes: <b>${filas.length}</b></p>
       <table><tr><th>Integrante</th><th>Perfil de cordada</th><th>Estado</th><th>Resp.</th></tr>${tablaPersonal}</table>
-      <h2>Puesto de Comando</h2>
-      <table><tr><th>Cargo</th><th>Integrante</th><th>Estado</th></tr>${tablaPC}</table>
+      <h2>Gerencia</h2>
+      <table><tr><th>Función</th><th>Integrante</th><th>Estado</th></tr>${tablaPC}</table>
       <h2>Cordadas ${fin ? 'al cierre' : 'al momento del informe'}</h2>
       ${tablaCordadas}
       ${I.mapa ? `<h2>Imagen del lugar</h2><img class="mapa-img" src="${esc(I.mapa.img)}" alt="Imagen georreferencial del lugar">` : ''}
@@ -1039,7 +1042,7 @@ function render() {
     if ((S.tab === 'tablero' || (S.tab === 'estado' && esAdmin())) && esLider()) vista = vistaTablero();
     else if (S.tab === 'informe' && puedeInforme()) vista = vistaInforme();
     else if (S.tab === 'abrir' && esLider()) vista = vistaAbrir();
-    else if (S.tab === 'nomina' && esLider()) vista = vistaNomina();
+    else if (S.tab === 'nomina' && puedeEditarNomina()) vista = vistaNomina();
     else if (S.tab === 'resumen' && esGerencia()) vista = vistaResumen();
     else vista = vistaEstado();
     html = encabezado() + pestanas() + vista + (S.tab === 'estado' ? pie() : '');
@@ -1071,10 +1074,10 @@ $app.addEventListener('change', (e) => {
     const email = t.dataset.email;
     const ocupado = cargoOcupado(t.value, email);
     if (ocupado) {
-      S.err = `El cargo ${t.value} ya lo tiene ${ocupado.nombre}. Cámbiale el cargo primero.`;
+      S.err = `La función ${t.value} ya la tiene ${ocupado.nombre}. Cámbiale la función primero.`;
       t.blur(); render();
     } else {
-      accion(async () => { await updateDoc(doc(db, 'nomina', email), { cargo: t.value }); S.msg = 'Cargo actualizado.'; });
+      accion(async () => { await updateDoc(doc(db, 'nomina', email), { cargo: t.value }); S.msg = 'Función actualizada.'; });
     }
   }
   if (t.dataset.actChange === 'cordada') {
@@ -1166,9 +1169,17 @@ $app.addEventListener('click', (e) => {
       }
       break;
     }
-    case 'activo': {
+    case 'eliminarUsuario': {
       const n = S.nomina.find((x) => x.email === b.dataset.email);
-      if (n) accion(() => updateDoc(doc(db, 'nomina', n.email), { activo: !n.activo }));
+      if (!n || n.email === S.email) break;
+      if (!confirm(`¿Eliminar a ${n.nombre} de la nómina URAC?\n\nYa no podrá ingresar a la app. Sus respuestas en informes anteriores se mantienen. No se puede deshacer.`)) break;
+      accion(async () => {
+        const b2 = writeBatch(db);
+        b2.delete(doc(db, 'nomina', n.email));
+        if (S.fotos[n.email]) b2.delete(doc(db, 'fotos', n.email));
+        await b2.commit();
+        S.msg = `${n.nombre} fue eliminado de la nómina.`;
+      });
       break;
     }
   }

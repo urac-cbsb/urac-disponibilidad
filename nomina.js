@@ -37,7 +37,7 @@ export const CATEGORIAS = [
   { id: 'tecnico', nombre: 'Técnico' },
   { id: 'sanitario', nombre: 'Sanitario' },
   { id: 'comunicaciones', nombre: 'Comunicaciones' },
-  { id: 'apoyo', nombre: 'Apoyo' }
+  { id: 'apoyo', nombre: 'Seguridad' }
 ];
 export const CATEGORIA_LIBRE = 'apoyo';
 
