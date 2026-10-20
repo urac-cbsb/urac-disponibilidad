@@ -794,7 +794,6 @@ function vistaTablero() {
   const otrasFases = Object.keys(FASES).filter((f) => f !== l.fase);
   return `${banda(l)}<main>
     ${avisos()}
-    ${ingresoManual(filas)}
     <div class="tres">
       <div class="cont si"><b>${k.si}</b><span>Disponibles</span></div>
       <div class="cont no"><b>${k.no}</b><span>No disponibles</span></div>
@@ -808,10 +807,10 @@ function vistaTablero() {
     <ul class="lista">${lista.map((f) => `<li>
       <div class="con-foto">${avatar(f.email, f.nombre, 36)}<div><div class="nom">${esc(nombreCorto(f.nombre))}</div><small>${esc(f.cordada ? CAT_NOMBRE[f.cordada] || f.cargo : f.cargo)}</small></div></div>
       <div class="der"><span class="pill ${PILL[f.c][0]}">${PILL[f.c][1]}</span><small>${esc(detalle(f))}</small>
-        <button class="editar" data-act="manualPara" data-v="${esc(f.email)}" aria-label="Ingresar o editar disponibilidad de ${esc(f.nombre)}">EDITAR</button></div>
-    </li>`).join('') || '<li><span class="suave">Nadie en este filtro.</span></li>'}</ul>
-    <button class="contorno" data-act="compartir">COMPARTIR INCIDENTE (WHATSAPP)</button>
-    ${sinResp.length ? `<button class="contorno" data-act="recordar">RECORDAR A SIN RESPUESTA (${sinResp.length})</button>` : ''}
+        <button class="editar" data-act="manualPara" data-v="${esc(f.email)}" aria-expanded="${S.manual.email === f.email}" aria-label="Ingresar o editar disponibilidad de ${esc(f.nombre)}">${S.manual.email === f.email ? 'CERRAR' : 'EDITAR'}</button></div>
+    </li>${S.manual.email === f.email ? `<li class="editor-fila">${editorManual(f)}</li>` : ''}`).join('') || '<li><span class="suave">Nadie en este filtro.</span></li>'}</ul>
+    <div class="dos discretos"><button class="discreto" data-act="compartir">Compartir incidente (WhatsApp)</button>
+    ${sinResp.length ? `<button class="discreto" data-act="recordar">Recordar a sin respuesta (${sinResp.length})</button>` : ''}</div>
     ${terreno(l)}
     <label>Cambiar fase</label>
     <div class="dos">${otrasFases.map((f) => `<button class="${f === 'movilizacion' ? 'peligro' : 'neutro'}" data-act="fase" data-v="${f}" ${S.ocupado ? 'disabled' : ''}>PASAR A ${FASES[f]}</button>`).join('')}</div>
@@ -820,41 +819,32 @@ function vistaTablero() {
   </main>`;
 }
 
-// Ingreso manual (Líder/Administrador): las mismas opciones que tiene cada operador.
-function ingresoManual(filas) {
+// Ingreso manual (Líder/Administrador), dentro de la fila del integrante: las mismas opciones que tiene cada operador.
+function editorManual(sel) {
   const M = S.manual;
-  const sel = filas.find((f) => f.email === M.email);
-  const opciones = `<option value="">Elegir integrante…</option>${filas.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-    .map((f) => `<option value="${esc(f.email)}" ${f.email === M.email ? 'selected' : ''}>${esc(f.nombre)}</option>`).join('')}`;
-  let cuerpo = '';
-  if (sel) {
-    const r = sel.r; const h = r && aFecha(r.hasta);
-    const actual = !r ? 'Sin respuesta' : sel.c === 'no' ? 'No disponible'
-      : sel.c === 'vencida' ? 'Disponibilidad vencida' : 'Disponible ' + (h ? 'hasta ' + cuando(h) : 'hasta nuevo aviso');
-    if (M.paso === 'tiempo') {
-      cuerpo = `<p class="suave">¿Hasta cuándo está disponible ${esc(nombreCorto(sel.nombre))}?</p>
-        <div class="opciones">
-          <button class="opcion" data-act="mHoras" data-v="2">2 h</button>
-          <button class="opcion" data-act="mHoras" data-v="4">4 h</button>
-          <button class="opcion" data-act="mHoras" data-v="8">8 h</button>
-          <button class="opcion" data-act="mHoras" data-v="24">24 h</button>
-          <button class="opcion ancha" data-act="mHoras" data-v="0">HASTA NUEVO AVISO</button>
-        </div>
-        <div class="fila-input"><label for="horaManual" class="oculto">Hora exacta</label><input id="horaManual" type="time" data-bind="horaManual" value="${esc(S.f.horaManual)}">
-          <button class="neutro" style="width:auto;padding:0 16px" data-act="mHoraExacta" ${S.ocupado ? 'disabled' : ''}>HASTA ESA HORA</button></div>
-        <button class="enlace" data-act="mPaso" data-v="">Volver</button>`;
-    } else {
-      cuerpo = `<p class="suave">Estado actual: <b>${esc(actual)}</b></p>
-        <div class="dos"><button class="si grande-btn" data-act="mPaso" data-v="tiempo">DISPONIBLE</button>
-          <button class="no grande-btn" data-act="mNo" ${S.ocupado ? 'disabled' : ''}>NO DISPONIBLE</button></div>`;
-    }
+  const r = sel.r; const h = r && aFecha(r.hasta);
+  const actual = !r ? 'Sin respuesta' : sel.c === 'no' ? 'No disponible'
+    : sel.c === 'vencida' ? 'Disponibilidad vencida' : 'Disponible ' + (h ? 'hasta ' + cuando(h) : 'hasta nuevo aviso');
+  if (M.paso === 'tiempo') {
+    return `<div class="manual">
+      <p class="suave">¿Hasta cuándo está disponible ${esc(nombreCorto(sel.nombre))}?</p>
+      <div class="opciones">
+        <button class="opcion" data-act="mHoras" data-v="2">2 h</button>
+        <button class="opcion" data-act="mHoras" data-v="4">4 h</button>
+        <button class="opcion" data-act="mHoras" data-v="8">8 h</button>
+        <button class="opcion" data-act="mHoras" data-v="24">24 h</button>
+        <button class="opcion ancha" data-act="mHoras" data-v="0">HASTA NUEVO AVISO</button>
+      </div>
+      <div class="fila-input"><label for="horaManual" class="oculto">Hora exacta</label><input id="horaManual" type="time" data-bind="horaManual" value="${esc(S.f.horaManual)}">
+        <button class="neutro" style="width:auto;padding:0 16px" data-act="mHoraExacta" ${S.ocupado ? 'disabled' : ''}>HASTA ESA HORA</button></div>
+      <button class="enlace" data-act="mPaso" data-v="">Volver</button>
+    </div>`;
   }
-  return `<details class="manual" ${M.email ? 'open' : ''}>
-    <summary>INGRESO MANUAL DE DISPONIBILIDAD</summary>
-    <p class="suave">Para integrantes que avisaron su disponibilidad al Líder y no pueden reportarla en la app. Queda registrado en la bitácora.</p>
-    <div class="campo"><label for="manualPara">Integrante</label><select id="manualPara" data-act-change="manualPara">${opciones}</select></div>
-    ${cuerpo}
-  </details>`;
+  return `<div class="manual">
+    <p class="suave">Ingreso manual · Estado actual: <b>${esc(actual)}</b></p>
+    <div class="dos"><button class="si grande-btn" data-act="mPaso" data-v="tiempo">DISPONIBLE</button>
+      <button class="no grande-btn" data-act="mNo" ${S.ocupado ? 'disabled' : ''}>NO DISPONIBLE</button></div>
+  </div>`;
 }
 
 // --- Resumen (Gerencia): solo totales ---
@@ -1117,7 +1107,7 @@ $app.addEventListener('click', (e) => {
       await guardarRespuesta({ estado: 'si', hasta: h ? new Date(Date.now() + h * H) : null });
     }); break;
     case 'horaExacta': accion(() => guardarRespuesta({ estado: 'si', hasta: horaDesde(S.f.hora) })); break;
-    case 'manualPara': S.manual = { email: v, paso: null }; S.err = ''; S.msg = ''; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); break;
+    case 'manualPara': S.manual = { email: S.manual.email === v ? '' : v, paso: null }; S.err = ''; S.msg = ''; render(); break;
     case 'mPaso': S.manual.paso = v || null; render(); break;
     case 'mNo': accion(() => guardarRespuesta({ estado: 'no', para: fichaManual() })); break;
     case 'mHoras': accion(() => { const h = Number(v); return guardarRespuesta({ estado: 'si', hasta: h ? new Date(Date.now() + h * H) : null, para: fichaManual() }); }); break;
