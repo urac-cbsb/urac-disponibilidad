@@ -17,6 +17,8 @@ service cloud.firestore {
 
     function miCordada() { return get(perfilPath()).data.get('cordada', null); }
     function miNombre() { return get(perfilPath()).data.nombre; }
+    // Pueden sacar el informe: Líder, Administrador, Jefe de Operaciones y Jefe de Planificación.
+    function informe() { return lider() || (member() && get(perfilPath()).data.cargo in ['Jefe de Operaciones', 'Jefe de Planificación']); }
     function nominaValida(d) {
       return d.keys().hasOnly(['nombre', 'cargo', 'rol', 'cordada', 'activo'])
         && d.get('cordada', null) in [null, 'lider_cordada', 'navegante', 'tecnico', 'sanitario', 'comunicaciones', 'apoyo']
@@ -38,7 +40,7 @@ service cloud.firestore {
 
     // Nómina: cada integrante ve solo su ficha; el Líder y el Administrador ven y editan todas.
     match /nomina/{email} {
-      allow read: if (signed() && email == myEmail()) || lider();
+      allow read: if (signed() && email == myEmail()) || informe();
       allow create: if nominaValida(request.resource.data) && email == email.lower() && (
         lider() ||
         (signed() && email == myEmail() && !exists(configPath()) && existsAfter(configPath())
@@ -74,7 +76,7 @@ service cloud.firestore {
 
       // Bitácora de movimientos (base del informe): nadie la modifica ni la borra.
       match /eventos/{ev} {
-        allow read: if lider();
+        allow read: if informe();
         allow create: if member()
           && request.resource.data.keys().hasOnly(['tipo', 'fase', 'detalle', 'por', 'nombre', 'en'])
           && request.resource.data.por == myEmail()
@@ -99,7 +101,7 @@ service cloud.firestore {
 
       // Respuesta de cada integrante: solo él la escribe; solo él y el Líder la leen.
       match /respuestas/{email} {
-        allow read: if lider() || (member() && email == myEmail());
+        allow read: if informe() || (member() && email == myEmail());
         allow create, update: if member() && email == myEmail() && abierto()
           && request.resource.data.keys().hasOnly(['estado', 'hasta', 'eta', 'en'])
           && request.resource.data.estado in ['si', 'no']

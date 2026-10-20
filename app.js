@@ -54,6 +54,9 @@ const esGerencia = () => S.perfil && S.perfil.rol === 'gerencia';
 // El Administrador gestiona la cuenta y tiene las facultades del Líder, pero no integra la URAC:
 // no responde disponibilidad ni cuenta en totales ni cordadas.
 const esAdmin = () => S.perfil && S.perfil.rol === 'admin';
+// Informe: Líder, Administrador, Jefe de Operaciones y Jefe de Planificación, en cualquier etapa.
+const CARGOS_INFORME = ['Jefe de Operaciones', 'Jefe de Planificación'];
+const puedeInforme = () => esLider() || (S.perfil && CARGOS_INFORME.includes(S.perfil.cargo));
 const integrantes = () => S.nomina.filter((n) => n.activo && n.rol !== 'admin');
 
 // ---------- Utilidades ----------
@@ -137,11 +140,12 @@ function iniciarSesion() {
       ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados'].forEach(cortar); llamadoId = null;
       return render();
     }
-    if (rolActual !== S.perfil.rol || !subs.llamados) {
-      rolActual = S.perfil.rol;
+    if (rolActual !== S.perfil.rol + '|' + S.perfil.cargo || !subs.llamados) {
+      rolActual = S.perfil.rol + '|' + S.perfil.cargo;
       ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados'].forEach(cortar); llamadoId = null;
       escucharLlamados();
-      if (esLider()) { escucharNomina(); escucharFotos(); escucharCerrados(); }
+      if (esLider()) escucharFotos();
+      if (puedeInforme()) { escucharNomina(); escucharCerrados(); }
       if (!tabsDisponibles().some((t) => t.id === S.tab)) S.tab = tabsDisponibles()[0].id;
     }
     render();
@@ -351,6 +355,7 @@ async function subirMapa(archivo) {
 }
 
 async function cargarInforme(id) {
+  if (S.tab !== 'informe') S.tabPrevio = S.tab;
   S.informe = { cargando: true };
   S.tab = 'informe'; render();
   const ref = doc(db, 'llamados', id);
@@ -449,7 +454,7 @@ function avisos() {
   return `${S.err ? `<p class="error" role="alert">${esc(S.err)}</p>` : ''}${S.msg ? `<p class="ok-msg">${esc(S.msg)}</p>` : ''}`;
 }
 
-function pie() { return '<footer>Esta app no reemplaza el aviso por radio frecuencia 5-1.</footer>'; }
+function pie() { return ''; }
 
 function vistaSinConfig() {
   return `${encabezado()}<main><h3>Falta conectar la base de datos</h3>
@@ -627,7 +632,6 @@ function vistaAbrir() {
   const plazo = S.f.nivel === 'sno' && S.f.fase === 'alerta';
   return `<main>
     <h3>Nuevo llamado</h3>
-    ${S.llamado ? '<p class="aviso">Hay un llamado abierto. Al abrir uno nuevo, el anterior se cerrará.</p>' : ''}
     <div><label>Fase</label>${seg('fase', FASES_APERTURA, 'f-')}</div>
     <div><label>Nivel</label>${seg('nivel', NIVELES)}</div>
     <div class="campo"><label for="desc">Descripción breve</label>
@@ -687,14 +691,18 @@ function cordadasHtml(res, conNombres) {
 }
 
 // Tablero sin llamado activo: abrir llamado e informes de llamados cerrados.
-function vistaInicioLider() {
-  const filas = S.cerrados.map((c) => {
+function listaInformes() {
+  return S.cerrados.map((c) => {
     const a = aFecha(c.creadoEn); const z = aFecha(c.cerradoEn);
     const nuevo = c.id === S.ultimoCerrado;
     return `<li class="${nuevo ? 'destacado' : ''}"><div><div class="nom">${a ? cuando(a) : ''} · ${esc(NIVELES[c.nivel] || '')}</div>
       <small>${esc(c.descripcion || '')}${a && z ? ' · duró ' + dur(z - a) : ''}</small></div>
       <button class="${nuevo ? 'principal' : 'contorno'} chico" data-act="informe" data-v="${c.id}">INFORME</button></li>`;
   }).join('');
+}
+
+function vistaInicioLider() {
+  const filas = listaInformes();
   return `<main>
     ${avisos()}
     <button class="principal" data-act="tab" data-v="abrir">ABRIR LLAMADO</button>
@@ -745,14 +753,14 @@ function vistaTablero() {
     <label>Cambiar fase</label>
     <div class="dos">${otrasFases.map((f) => `<button class="${f === 'movilizacion' ? 'peligro' : 'neutro'}" data-act="fase" data-v="${f}" ${S.ocupado ? 'disabled' : ''}>PASAR A ${FASES[f]}</button>`).join('')}</div>
     <button class="${l.fase === 'desmovilizacion' ? 'principal' : 'neutro'}" data-act="cerrar" ${S.ocupado ? 'disabled' : ''}>CERRAR LLAMADO</button>
-    <button class="enlace" data-act="tab" data-v="abrir">Abrir un llamado nuevo</button>
+    <button class="contorno" data-act="informe" data-v="${l.id}">GENERAR INFORME (A LA FECHA)</button>
   </main>`;
 }
 
 // --- Resumen (Gerencia): solo totales ---
 function vistaResumen() {
   const l = S.llamado;
-  if (!l) return '<main></main>';
+  if (!l) return puedeInforme() && S.cerrados.length ? `<main><h3>Informes de llamados</h3><ul class="lista informes">${listaInformes()}</ul></main>` : '<main></main>';
   const entradas = Object.values((S.resumen && S.resumen.r) || {});
   const ahora = Date.now();
   let si = 0, no = 0;
@@ -778,6 +786,7 @@ function vistaResumen() {
     ${cordadasHtml(armarCordadas(disp), true)}
     <label>Disponibles que siguen vigentes</label>
     <div class="tres">${[2, 6, 12].map((x) => `<div class="cont panel"><b>${vig[x]}</b><span>en ${x} h</span></div>`).join('')}</div>
+    ${puedeInforme() ? `<button class="contorno" data-act="informe" data-v="${l.id}">GENERAR INFORME (A LA FECHA)</button>` : ''}
     <label>Integrantes disponibles</label>
     <ul class="lista">${disp.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map((d) => `<li>
       <div><div class="nom">${esc(nombreCorto(d.nombre))}</div><small>${esc(d.cat ? CAT_NOMBRE[d.cat] || d.cat : 'Sin perfil de cordada')}</small></div>
@@ -844,7 +853,7 @@ function vistaInforme() {
   const hitos = I.eventos.filter((e) => e.tipo === 'apertura' || e.tipo === 'fase').map((e) => ({ fase: e.fase, en: aFecha(e.en) }));
   if (!hitos.length && ini) hitos.push({ fase: l.fase, en: ini });
   const fases = hitos.map((h, i) => {
-    const hasta = i + 1 < hitos.length ? hitos[i + 1].en : fin;
+    const hasta = i + 1 < hitos.length ? hitos[i + 1].en : (fin || new Date(corte));
     return `<tr><td>${esc(FASES[h.fase] || h.fase)}</td><td>${fecha(h.en)}</td><td>${hasta && h.en ? dur(hasta - h.en) : '—'}</td></tr>`;
   }).join('');
   // Disponibilidad al cierre.
@@ -866,25 +875,25 @@ function vistaInforme() {
   const bitacora = I.eventos.map((e) => `<tr><td>${fecha(aFecha(e.en))}</td><td>${esc(FASES[e.fase] || '')}</td><td>${describirEvento(e)}</td></tr>`).join('')
     || '<tr><td colspan="3">Este llamado no tiene bitácora registrada.</td></tr>';
   return `<main>
-    <div class="no-print dos"><button class="principal" data-act="imprimir">IMPRIMIR / GUARDAR PDF</button><button class="neutro" data-act="tab" data-v="tablero">VOLVER</button></div>
+    <div class="no-print dos"><button class="principal" data-act="imprimir">IMPRIMIR / GUARDAR PDF</button><button class="neutro" data-act="tab" data-v="${esc(S.tabPrevio || 'tablero')}">VOLVER</button></div>
     <article class="informe">
       <div class="inf-logos">${LOGOS}</div>
-      <h1>Informe de llamado · URAC</h1>
+      <h1>Informe de llamado · URAC${fin ? '' : ' (preliminar)'}</h1>
       <p class="inf-sub">Unidad de Rescate Agreste Chena · Cuerpo de Bomberos de San Bernardo</p>
       <table class="datos">
         <tr><th>Nivel de activación</th><td>${esc(NIVELES[l.nivel] || l.nivel)}</td></tr>
         <tr><th>Descripción</th><td>${esc(l.descripcion)}</td></tr>
         <tr><th>Lugar</th><td>${l.lugar ? `${esc(l.lugar.nombre)} (${Number(l.lugar.lat).toFixed(4)}, ${Number(l.lugar.lon).toFixed(4)})` : '—'}</td></tr>
         <tr><th>Apertura</th><td>${fecha(ini)} · ${esc(nombreDe(l.creadoPor))}</td></tr>
-        <tr><th>Cierre</th><td>${fecha(fin)} · ${esc(nombreDe(l.cerradoPor))}</td></tr>
-        <tr><th>Duración total</th><td>${ini && fin ? dur(fin - ini) : '—'}</td></tr>
+        <tr><th>Cierre</th><td>${fin ? fecha(fin) + ' · ' + esc(nombreDe(l.cerradoPor)) : 'En curso · FASE DE ' + esc(FASES[l.fase] || l.fase)}</td></tr>
+        <tr><th>Duración${fin ? ' total' : ' a la fecha'}</th><td>${ini ? dur((fin ? fin.getTime() : corte) - ini) : '—'}</td></tr>
       </table>
       <h2>Fases</h2>
       <table><tr><th>Fase</th><th>Inicio</th><th>Duración</th></tr>${fases}</table>
-      <h2>Disponibilidad al cierre</h2>
+      <h2>Disponibilidad ${fin ? 'al cierre' : 'al momento del informe'}</h2>
       <p>Disponibles: <b>${k.si}</b> · No disponibles: <b>${k.no}</b> · Sin respuesta o vencida: <b>${k.sr}</b> · Total integrantes: <b>${filas.length}</b></p>
       <table><tr><th>Integrante</th><th>Perfil de cordada</th><th>Estado</th><th>Resp.</th></tr>${tablaPersonal}</table>
-      <h2>Cordadas al cierre</h2>
+      <h2>Cordadas ${fin ? 'al cierre' : 'al momento del informe'}</h2>
       ${tablaCordadas}
       ${I.mapa ? `<h2>Imagen del lugar</h2><img class="mapa-img" src="${esc(I.mapa.img)}" alt="Imagen georreferencial del lugar">` : ''}
       <h2>Bitácora de movimientos</h2>
@@ -911,7 +920,7 @@ function render() {
   else {
     let vista;
     if ((S.tab === 'tablero' || (S.tab === 'estado' && esAdmin())) && esLider()) vista = vistaTablero();
-    else if (S.tab === 'informe' && esLider()) vista = vistaInforme();
+    else if (S.tab === 'informe' && puedeInforme()) vista = vistaInforme();
     else if (S.tab === 'abrir' && esLider()) vista = vistaAbrir();
     else if (S.tab === 'nomina' && esLider()) vista = vistaNomina();
     else if (S.tab === 'resumen' && esGerencia()) vista = vistaResumen();
@@ -999,7 +1008,7 @@ $app.addEventListener('click', (e) => {
       await guardarRespuesta({ estado: 'si', hasta: d });
     }); break;
     case 'informe': accion(async () => {
-      try { await cargarInforme(v); } catch (err) { S.informe = null; S.tab = 'tablero'; throw err; }
+      try { await cargarInforme(v); } catch (err) { S.informe = null; S.tab = S.tabPrevio || 'estado'; throw err; }
     }); break;
     case 'imprimir': window.print(); break;
     case 'abrirLlamado': accion(abrirLlamado); break;
