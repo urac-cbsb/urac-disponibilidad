@@ -1,5 +1,7 @@
 # URAC · Disponibilidad
 
+> **Historial, decisiones y cómo modificar el sistema:** ver [`docs/HISTORIAL.md`](docs/HISTORIAL.md).
+
 App web (instalable en el teléfono) para que los integrantes de la **Unidad de Rescate Agreste Chena** del Cuerpo de Bomberos de San Bernardo informen su disponibilidad en las fases de **Monitoreo, Alerta y Movilización**.
 
 > Apoya la gestión interna. **No reemplaza** el aviso por radio frecuencia 5-1 ni los procedimientos oficiales de activación.
