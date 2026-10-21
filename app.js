@@ -38,6 +38,7 @@ const configurado = !String(firebaseConfig.apiKey).startsWith('PEGAR');
 const S = {
   cargando: true, user: null, email: '', perfil: null, sinNomina: false, bootstrapLibre: false,
   tab: 'estado', paso: null, filtro: 'todos',
+  fichas: {},
   llamado: null, miResp: null, respuestas: {}, nomina: [], resumen: null, fotos: {},
   clima: { clave: '', datos: null, err: '', cargando: false, en: 0 }, lugares: [],
   mapa: null, cerrados: [], ultimoCerrado: null, informe: null, manual: { email: '', paso: null },
@@ -48,7 +49,7 @@ const S = {
 };
 
 let app, auth, db;
-let subs = { perfil: null, miFoto: null, llamados: null, miResp: null, respuestas: null, resumen: null, nomina: null, fotos: null, mapa: null, cerrados: null };
+let subs = { perfil: null, miFoto: null, llamados: null, miResp: null, respuestas: null, resumen: null, nomina: null, fotos: null, mapa: null, cerrados: null, fichas: null };
 let llamadoId = null;
 
 const esLider = () => S.perfil && ['lider', 'admin'].includes(S.perfil.rol);
@@ -73,6 +74,10 @@ const esAdmin = () => S.perfil && S.perfil.rol === 'admin';
 const CARGOS_INFORME = ['Jefe de Operaciones', 'Jefe de Planificación'];
 const puedeInforme = () => esLider() || (S.perfil && CARGOS_INFORME.includes(S.perfil.cargo));
 // Edición de la Nómina: solo el Administrador y el Líder de Unidad (no el Jefe de Operaciones).
+// Fichas médicas: LUMED y Administrador acceden siempre (cargar, ver, descargar, eliminar).
+// El Líder de Unidad solo puede VER la ficha de quien esté DISPONIBLE en el incidente activo.
+const esMedico = () => esAdmin() || (S.perfil && S.perfil.cargo === 'LUMED');
+const esLiderUnidad = () => esLider() && S.perfil.cargo === 'Líder de Unidad';
 const puedeEditarNomina = () => esAdmin() || (esLider() && S.perfil.cargo === 'Líder de Unidad');
 const integrantes = () => S.nomina.filter((n) => n.activo && n.rol !== 'admin');
 
@@ -148,22 +153,24 @@ function iniciarSesion() {
     S.cargando = false;
     if (!snap.exists()) {
       S.perfil = null; S.sinNomina = true;
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados', 'fichas'].forEach(cortar); llamadoId = null;
       try { S.bootstrapLibre = !(await getDoc(doc(db, 'config', 'inicial'))).exists(); } catch (e) { S.bootstrapLibre = false; }
       return render();
     }
     S.sinNomina = false;
     S.perfil = snap.data();
     if (!S.perfil.activo) {
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados', 'fichas'].forEach(cortar); llamadoId = null;
       return render();
     }
     if (rolActual !== S.perfil.rol + '|' + S.perfil.cargo || !subs.llamados) {
       rolActual = S.perfil.rol + '|' + S.perfil.cargo;
-      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados'].forEach(cortar); llamadoId = null;
+      ['llamados', 'miResp', 'respuestas', 'resumen', 'nomina', 'fotos', 'mapa', 'cerrados', 'fichas'].forEach(cortar); llamadoId = null;
       escucharLlamados();
       if (esLider()) escucharFotos();
       if (puedeInforme()) { escucharNomina(); escucharCerrados(); }
+      else if (esMedico()) escucharNomina();
+      if (esMedico() || esLiderUnidad()) escucharFichas();
       if (!tabsDisponibles().some((t) => t.id === S.tab)) S.tab = tabsDisponibles()[0].id;
     }
     render();
@@ -180,6 +187,7 @@ function escucharLlamados() {
     });
     S.llamado = ultimo;
     const nuevoId = ultimo ? ultimo.id : null;
+    sincronizarPuntero(nuevoId);
     if (nuevoId !== llamadoId) {
       llamadoId = nuevoId;
       cortar('miResp'); cortar('respuestas'); cortar('resumen'); cortar('mapa');
@@ -209,6 +217,21 @@ function escucharNomina() {
     const l = []; qs.forEach((d) => l.push({ email: d.id, ...d.data() }));
     l.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
     S.nomina = l; render();
+  }, () => {});
+}
+
+// config/activo apunta al incidente abierto: las reglas lo usan para saber quién está disponible.
+let punteroSync;
+function sincronizarPuntero(id) {
+  if (!esLider() || punteroSync === id) return;
+  punteroSync = id;
+  setDoc(doc(db, 'config', 'activo'), { id: id || null, en: serverTimestamp() }).catch(() => { punteroSync = undefined; });
+}
+
+function escucharFichas() {
+  subs.fichas = onSnapshot(collection(db, 'fichasMeta'), (qs) => {
+    const m = {}; qs.forEach((d) => { m[d.id] = d.data(); });
+    S.fichas = m; render();
   }, () => {});
 }
 
@@ -343,6 +366,7 @@ async function abrirLlamado() {
     plazoSNO: plazo, creadoEn: serverTimestamp(), creadoPor: S.email };
   b.set(ref, datos);
   b.set(doc(db, 'llamados', ref.id, 'resumen', 'actual'), { r: {} });
+  b.set(doc(db, 'config', 'activo'), { id: ref.id, en: serverTimestamp() });
   evento(b, ref.id, 'apertura', S.f.fase, `Nivel ${NIVELES[S.f.nivel]} · ${lugar.nombre} · ${desc}`);
   await b.commit();
   S.f.desc = ''; S.f.lugar = null; S.f.lugarQ = ''; S.lugares = []; S.tab = 'tablero';
@@ -368,6 +392,7 @@ async function cerrarLlamado() {
   const b = writeBatch(db);
   b.update(doc(db, 'llamados', l.id), { abierto: false, cerradoEn: serverTimestamp(), cerradoPor: S.email });
   evento(b, l.id, 'cierre', l.fase, 'Incidente cerrado');
+  b.set(doc(db, 'config', 'activo'), { id: null, en: serverTimestamp() });
   await b.commit();
   S.ultimoCerrado = l.id; S.tab = 'tablero';
   S.msg = 'Incidente cerrado. Ya puedes generar el informe.';
@@ -558,11 +583,12 @@ function encabezado() {
 }
 
 function tabsDisponibles() {
-  if (esAdmin()) return [{ id: 'tablero', txt: 'Panel' }, { id: 'nomina', txt: 'Nómina' }];
+  if (esAdmin()) return [{ id: 'tablero', txt: 'Panel' }, { id: 'nomina', txt: 'Nómina' }, { id: 'fichas', txt: 'Fichas' }];
   if (esLider() && !puedeEditarNomina()) return [{ id: 'estado', txt: 'Mi estado' }, { id: 'tablero', txt: 'Panel' }];
   const t = [{ id: 'estado', txt: 'Mi estado' }];
   if (esLider()) t.push({ id: 'tablero', txt: 'Panel' }, { id: 'nomina', txt: 'Nómina' });
   else if (esGerencia()) t.push({ id: 'resumen', txt: 'Resumen' });
+  if (esMedico()) t.push({ id: 'fichas', txt: 'Fichas' });
   return t;
 }
 
@@ -898,6 +924,7 @@ function vistaTablero() {
     <ul class="lista">${lista.map((f) => `<li>
       <div class="con-foto">${avatar(f.email, f.nombre, 36)}<div><div class="nom">${esc(nombreCorto(f.nombre))}</div><small>${esc(f.cordada ? CAT_NOMBRE[f.cordada] || f.cargo : f.cargo)}</small></div></div>
       <div class="der"><span class="pill ${PILL[f.c][0]}">${PILL[f.c][1]}</span><small>${esc(detalle(f))}</small>
+        ${S.fichas[f.email] && (esMedico() || (esLiderUnidad() && (f.c === 'si' || f.c === 'vence'))) ? `<button class="editar" data-act="verFicha" data-v="${esc(f.email)}" aria-label="Ver ficha médica de ${esc(f.nombre)}">FICHA MÉDICA</button>` : ''}
         <button class="editar" data-act="manualPara" data-v="${esc(f.email)}" aria-expanded="${S.manual.email === f.email}" aria-label="Ingresar o editar disponibilidad de ${esc(f.nombre)}">${S.manual.email === f.email ? 'CERRAR' : 'EDITAR'}</button></div>
     </li>${S.manual.email === f.email ? `<li class="editor-fila">${editorManual(f)}</li>` : ''}`).join('') || '<li><span class="suave">Nadie en este filtro.</span></li>'}</ul>
     <div class="dos discretos"><button class="discreto" data-act="compartir">Compartir incidente (WhatsApp)</button>
@@ -1023,6 +1050,7 @@ function describirEvento(e) {
     case 'apertura': return `<b>Apertura en FASE DE ${esc(FASES[e.fase] || e.fase)}</b> por ${quien}. ${esc(e.detalle)}`;
     case 'fase': return `<b>Cambio de fase</b> (${esc(e.detalle)}) por ${quien}`;
     case 'respuesta': return `${quien}: <b>${esc(e.detalle)}</b>`;
+    case 'ficha': return `${esc(e.detalle)} por ${quien}`;
     case 'manual': return `<b>Ingreso manual</b> por ${quien} · ${esc(e.detalle)}`;
     case 'mapa': return `${esc(e.detalle)} por ${quien}`;
     case 'cierre': return `<b>${esc(e.detalle)}</b> por ${quien}`;
@@ -1097,6 +1125,158 @@ function vistaInforme() {
   </main>`;
 }
 
+// ---------- Fichas médicas (PDF guardado en partes dentro de la base de datos) ----------
+const FICHA_MAX = 5 * 1024 * 1024;
+const FICHA_PARTE = 800000;
+const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const idParte = (i) => String(i).padStart(2, '0');
+function tamTexto(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
+
+function leerBase64(archivo) {
+  return new Promise((ok, err) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(',')[1] || '');
+    r.onerror = () => err(new Error('No se pudo leer el archivo.'));
+    r.readAsDataURL(archivo);
+  });
+}
+
+async function subirFicha(email, archivo) {
+  if (!archivo) return;
+  if (archivo.type !== 'application/pdf' && !/\.pdf$/i.test(archivo.name)) throw new Error('La ficha médica debe ser un archivo PDF.');
+  if (archivo.size > FICHA_MAX) throw new Error(`El PDF pesa ${tamTexto(archivo.size)}. El máximo es 5 MB.`);
+  const n = integrantes().find((x) => x.email === email);
+  const previo = S.fichas[email];
+  if (previo && !confirm(`¿Reemplazar la ficha médica de ${n ? n.nombre : email}?`)) return;
+  const b64 = await leerBase64(archivo);
+  const partes = [];
+  for (let i = 0; i < b64.length; i += FICHA_PARTE) partes.push(b64.slice(i, i + FICHA_PARTE));
+  const b = writeBatch(db);
+  partes.forEach((d, i) => b.set(doc(db, 'fichas', email, 'partes', idParte(i)), { d }));
+  b.set(doc(db, 'fichasMeta', email), { nombre: archivo.name.slice(0, 120), bytes: archivo.size, partes: partes.length, en: serverTimestamp(), por: S.perfil.nombre });
+  await b.commit();
+  if (previo && previo.partes > partes.length) {
+    const b2 = writeBatch(db);
+    for (let i = partes.length; i < previo.partes; i++) b2.delete(doc(db, 'fichas', email, 'partes', idParte(i)));
+    await b2.commit();
+  }
+  S.msg = `Ficha médica de ${n ? nombreCorto(n.nombre) : email} guardada.`;
+}
+
+async function eliminarFicha(email) {
+  const meta = S.fichas[email];
+  if (!meta) return;
+  const n = integrantes().find((x) => x.email === email);
+  if (!confirm(`¿Eliminar la ficha médica de ${n ? n.nombre : email}? No se puede deshacer.`)) return;
+  const b = writeBatch(db);
+  for (let i = 0; i < meta.partes; i++) b.delete(doc(db, 'fichas', email, 'partes', idParte(i)));
+  b.delete(doc(db, 'fichasMeta', email));
+  await b.commit();
+  S.msg = 'Ficha médica eliminada.';
+}
+
+async function bajarFicha(email) {
+  const meta = S.fichas[email];
+  if (!meta) throw new Error('Este integrante no tiene ficha médica.');
+  const qs = await getDocs(collection(db, 'fichas', email, 'partes'));
+  const partes = [];
+  qs.forEach((d) => partes.push({ id: d.id, d: d.data().d }));
+  partes.sort((a, b) => a.id.localeCompare(b.id));
+  if (partes.length < meta.partes) throw new Error('La ficha está incompleta. Vuelve a cargarla.');
+  const bin = atob(partes.map((p) => p.d).join(''));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+function cargarPdfJs() {
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  return new Promise((ok, err) => {
+    const sc = document.createElement('script');
+    sc.src = PDFJS;
+    sc.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; ok(window.pdfjsLib); };
+    sc.onerror = () => err(new Error('No se pudo cargar el visor de PDF. Revisa tu conexión.'));
+    document.head.appendChild(sc);
+  });
+}
+
+// Visor a pantalla completa, fuera de la app (no se borra al refrescar). Solo LUMED/Admin ven "Descargar".
+function cerrarVisor() { const v = document.getElementById('visor'); if (v) v.remove(); document.body.style.overflow = ''; }
+async function abrirVisor(email) {
+  const n = integrantes().find((x) => x.email === email) || { nombre: email };
+  cerrarVisor();
+  const v = document.createElement('div');
+  v.id = 'visor'; v.setAttribute('role', 'dialog'); v.setAttribute('aria-modal', 'true'); v.setAttribute('aria-label', 'Ficha médica de ' + n.nombre);
+  v.innerHTML = `<div class="visor-top"><div><b>FICHA MÉDICA</b><small>${esc(n.nombre)} · confidencial</small></div>
+    <div class="visor-acc">${esMedico() ? '<button class="editar" data-v-act="bajar">DESCARGAR</button>' : ''}<button class="editar" data-v-act="cerrar">CERRAR</button></div></div>
+    <div class="visor-cuerpo"><p class="suave">Cargando ficha…</p></div>`;
+  document.body.appendChild(v); document.body.style.overflow = 'hidden';
+  let bytes = null;
+  v.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-v-act]'); if (!a) return;
+    if (a.dataset.vAct === 'cerrar') cerrarVisor();
+    if (a.dataset.vAct === 'bajar' && bytes) {
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+      const link = document.createElement('a');
+      link.href = url; link.download = `Ficha medica - ${n.nombre}.pdf`;
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+  });
+  const cuerpo = v.querySelector('.visor-cuerpo');
+  try {
+    const [datos, lib] = await Promise.all([bajarFicha(email), cargarPdfJs()]);
+    bytes = datos;
+    const pdf = await lib.getDocument({ data: datos.slice() }).promise;
+    cuerpo.innerHTML = '';
+    const ancho = Math.min(cuerpo.clientWidth || 360, 900);
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const pag = await pdf.getPage(i);
+      const base = pag.getViewport({ scale: 1 });
+      const esc2 = (ancho / base.width) * (window.devicePixelRatio || 1);
+      const vp = pag.getViewport({ scale: esc2 });
+      const c = document.createElement('canvas');
+      c.width = vp.width; c.height = vp.height; c.style.width = '100%';
+      c.setAttribute('aria-label', `Página ${i} de ${pdf.numPages}`);
+      cuerpo.appendChild(c);
+      await pag.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    }
+    if (S.llamado && !esMedico()) {
+      const b = writeBatch(db);
+      evento(b, S.llamado.id, 'ficha', S.llamado.fase, `Ficha médica de ${n.nombre} consultada`);
+      b.commit().catch(() => {});
+    }
+  } catch (e) {
+    cuerpo.innerHTML = `<p class="error">${esc(e && e.code === 'permission-denied'
+      ? 'No tienes acceso a esta ficha. El Líder solo puede verla mientras el integrante esté disponible en un incidente activo.'
+      : errTexto(e))}</p>`;
+  }
+}
+
+function vistaFichas() {
+  const lista = integrantes().slice().sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const con = lista.filter((n) => S.fichas[n.email]).length;
+  return `<main>
+    ${avisos()}
+    <h3>Fichas médicas</h3>
+    <p class="suave">Confidencial. Solo LUMED y Administrador cargan, ven, descargan y eliminan. El Líder de Unidad solo puede verla mientras el integrante esté disponible en un incidente. PDF de hasta 5 MB.</p>
+    <p class="suave">${con} de ${lista.length} integrantes con ficha cargada.</p>
+    <ul class="miembros">${lista.map((n) => {
+      const m = S.fichas[n.email];
+      const f = m && aFecha(m.en);
+      return `<li class="miembro">
+        <div class="m-top"><div><div class="nom">${esc(n.nombre)}</div>
+          <small>${m ? `Ficha cargada · ${esc(tamTexto(m.bytes))}${f ? ' · ' + esc(cuando(f)) : ''}${m.por ? ' · por ' + esc(nombreCorto(m.por)) : ''}` : 'Sin ficha médica'}</small></div></div>
+        <div class="dos">
+          ${m ? `<button class="neutro" data-act="verFicha" data-v="${esc(n.email)}">VER / DESCARGAR</button>` : ''}
+          <label class="boton-archivo">${m ? 'REEMPLAZAR' : 'CARGAR PDF'}<input type="file" accept="application/pdf,.pdf" data-ficha="${esc(n.email)}" class="oculto"></label>
+          ${m ? `<button class="eliminar" style="min-height:50px" data-act="eliminarFicha" data-v="${esc(n.email)}">ELIMINAR</button>` : ''}
+        </div></li>`;
+    }).join('')}</ul>
+  </main>`;
+}
+
 // ---------- Render ----------
 let renderPendiente = false;
 function render() {
@@ -1115,6 +1295,7 @@ function render() {
     let vista;
     if ((S.tab === 'tablero' || (S.tab === 'estado' && esAdmin())) && esLider()) vista = vistaTablero();
     else if (S.tab === 'informe' && puedeInforme()) vista = vistaInforme();
+    else if (S.tab === 'fichas' && esMedico()) vista = vistaFichas();
     else if (S.tab === 'abrir' && esLider()) vista = vistaAbrir();
     else if (S.tab === 'nomina' && puedeEditarNomina()) vista = vistaNomina();
     else if (S.tab === 'resumen' && esGerencia()) vista = vistaResumen();
@@ -1157,6 +1338,11 @@ $app.addEventListener('change', (e) => {
   if (t.dataset.actChange === 'cordada') {
     const email = t.dataset.email;
     accion(() => updateDoc(doc(db, 'nomina', email), { cordada: t.value || null }));
+  }
+  if (t.dataset.ficha) {
+    const email = t.dataset.ficha; const archivo = t.files && t.files[0];
+    t.blur();
+    if (esMedico()) accion(() => subirFicha(email, archivo));
   }
   if (t.dataset.mapa) {
     const archivo = t.files && t.files[0];
@@ -1246,6 +1432,8 @@ $app.addEventListener('click', (e) => {
     case 'impRevisar': if (esAdmin()) accion(async () => revisarImportacion()); break;
     case 'impAgregar': if (esAdmin()) accion(importarNuevos); break;
     case 'impCambiar': if (esAdmin()) accion(() => cambiarCorreo(Number(v))); break;
+    case 'verFicha': abrirVisor(v); break;
+    case 'eliminarFicha': if (esMedico()) accion(() => eliminarFicha(v)); break;
     case 'eliminarUsuario': {
       const n = S.nomina.find((x) => x.email === b.dataset.email);
       if (!n || n.email === S.email) break;
@@ -1254,6 +1442,8 @@ $app.addEventListener('click', (e) => {
         const b2 = writeBatch(db);
         b2.delete(doc(db, 'nomina', n.email));
         if (S.fotos[n.email]) b2.delete(doc(db, 'fotos', n.email));
+        const fm = S.fichas[n.email];
+        if (fm && esMedico()) { for (let i = 0; i < fm.partes; i++) b2.delete(doc(db, 'fichas', n.email, 'partes', idParte(i))); b2.delete(doc(db, 'fichasMeta', n.email)); }
         await b2.commit();
         S.msg = `${n.nombre} fue eliminado de la nómina.`;
       });

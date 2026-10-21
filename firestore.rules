@@ -18,6 +18,20 @@ service cloud.firestore {
 
     // Editan la nómina solo el Administrador y el Líder de Unidad.
     function editorNomina() { return member() && (rol() == 'admin' || (rol() == 'lider' && get(perfilPath()).data.cargo == 'Líder de Unidad')); }
+    // Fichas médicas: LUMED y Administrador siempre; Líder de Unidad solo ve, y solo si el integrante está disponible.
+    function medico() { return member() && (rol() == 'admin' || get(perfilPath()).data.cargo == 'LUMED'); }
+    function liderUnidad() { return member() && rol() == 'lider' && get(perfilPath()).data.cargo == 'Líder de Unidad'; }
+    function activoPath() { return /databases/$(db)/documents/config/activo; }
+    function respDisponible(act, email) {
+      return exists(/databases/$(db)/documents/llamados/$(act)/respuestas/$(email))
+        && get(/databases/$(db)/documents/llamados/$(act)/respuestas/$(email)).data.estado == 'si'
+        && (get(/databases/$(db)/documents/llamados/$(act)/respuestas/$(email)).data.hasta == null
+            || get(/databases/$(db)/documents/llamados/$(act)/respuestas/$(email)).data.hasta > request.time);
+    }
+    function disponibleAhora(email) {
+      return exists(activoPath()) && get(activoPath()).data.get('id', null) is string
+        && respDisponible(get(activoPath()).data.id, email);
+    }
     function miCordada() { return get(perfilPath()).data.get('cordada', null); }
     function miNombre() { return get(perfilPath()).data.nombre; }
     // Clave de cada integrante en el resumen de Gerencia: su correo sin símbolos.
@@ -45,7 +59,7 @@ service cloud.firestore {
 
     // Nómina: cada integrante ve solo su ficha; el Líder y el Administrador ven y editan todas.
     match /nomina/{email} {
-      allow read: if (signed() && email == myEmail()) || informe();
+      allow read: if (signed() && email == myEmail()) || informe() || medico();
       allow create: if nominaValida(request.resource.data) && email == email.lower() && (
         editorNomina() ||
         (signed() && email == myEmail() && !exists(configPath()) && existsAfter(configPath())
@@ -64,6 +78,25 @@ service cloud.firestore {
     }
 
     // Llamados (fases de Monitoreo, Alerta y Movilización).
+    // Incidente activo (lo usan las reglas de fichas médicas).
+    match /config/activo {
+      allow read: if member();
+      allow write: if lider() && request.resource.data.keys().hasOnly(['id', 'en']);
+    }
+    match /fichasMeta/{email} {
+      allow read: if medico() || liderUnidad();
+      allow create, update: if medico()
+        && request.resource.data.keys().hasOnly(['nombre', 'bytes', 'partes', 'en', 'por'])
+        && request.resource.data.partes is int && request.resource.data.partes >= 1 && request.resource.data.partes <= 12
+        && request.resource.data.bytes is int && request.resource.data.bytes <= 5242880;
+      allow delete: if medico();
+    }
+    match /fichas/{email}/partes/{n} {
+      allow read: if medico() || (liderUnidad() && disponibleAhora(email));
+      allow create, update: if medico() && request.resource.data.keys().hasOnly(['d'])
+        && request.resource.data.d is string && request.resource.data.d.size() <= 800000;
+      allow delete: if medico();
+    }
     match /llamados/{id} {
       function llamadoValido(d) {
         return d.fase in ['monitoreo', 'alerta', 'movilizacion', 'operaciones', 'desmovilizacion']
@@ -89,7 +122,7 @@ service cloud.firestore {
           && request.resource.data.en == request.time
           && request.resource.data.detalle is string && request.resource.data.detalle.size() <= 500
           && ((request.resource.data.tipo == 'respuesta' && abierto())
-              || (lider() && request.resource.data.tipo in ['apertura', 'fase', 'mapa', 'cierre', 'manual']));
+              || (lider() && request.resource.data.tipo in ['apertura', 'fase', 'mapa', 'cierre', 'manual', 'ficha']));
         allow update: if false;
         allow delete: if lider() && !abierto();
       }

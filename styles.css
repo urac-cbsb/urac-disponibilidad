@@ -262,3 +262,12 @@ details.importar { border: 1px dashed var(--borde); padding: 0 12px; }
 details.importar[open] { padding-bottom: 12px; }
 details.importar > summary { min-height: 52px; display: flex; align-items: center; font-family: var(--display); font-weight: 700; font-size: 18px; color: var(--amarillo); cursor: pointer; }
 details.importar > * + * { margin-top: 10px; }
+
+/* Visor de ficha médica */
+#visor { position: fixed; inset: 0; z-index: 50; background: #0E0E0E; display: flex; flex-direction: column; }
+.visor-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 2px solid var(--amarillo); }
+.visor-top b { font-family: var(--display); font-size: 20px; color: var(--amarillo); display: block; }
+.visor-top small { color: var(--texto-suave); font-size: 13px; }
+.visor-acc { display: flex; gap: 8px; }
+.visor-cuerpo { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+.visor-cuerpo canvas { max-width: 900px; background: #FFFFFF; }
