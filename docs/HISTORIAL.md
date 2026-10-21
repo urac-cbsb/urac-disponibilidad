@@ -63,6 +63,13 @@ Cada integrante de la URAC (Unidad de Rescate Agreste Chena, Cuerpo de Bomberos 
 - En la Nómina se usa **"Función"** (no "Cargo"). Se **elimina** al integrante (no hay "desactivar").
 - Botones "Compartir incidente" y "Recordar a sin respuesta": discretos (borde gris).
 
+**Fichas médicas (confidenciales)**
+- Cada integrante puede tener una **ficha médica en PDF** (máx. 5 MB). Pestaña **Fichas**.
+- **LUMED y Administrador:** cargar, reemplazar, ver, descargar y eliminar, siempre.
+- **Líder de Unidad:** solo **ver** (sin descargar) y solo mientras el integrante esté **Disponible** en el incidente activo. Al pasar a No disponible, vencer su plazo o cerrarse el incidente, pierde el acceso. Cada consulta queda en la bitácora.
+- Nadie más (rescatistas, Gerencia, Jefe de Operaciones) puede verlas. El propio integrante tampoco.
+- Se guardan dentro de Firestore en partes (`fichasMeta/{correo}`, `fichas/{correo}/partes/{n}`), porque el almacenamiento de archivos de Firebase exige plan de pago desde 2026. Las reglas usan `config/activo` (incidente abierto) para validar la disponibilidad.
+
 **Informe del incidente**
 - Datos del incidente, fases con **inicio y término** (sin duración), disponibilidad, tabla **Gerencia**, cordadas, imagen del lugar y **bitácora** completa. Se imprime o guarda en PDF. Los informes de incidentes cerrados se pueden **eliminar**.
 
@@ -112,6 +119,7 @@ Cada integrante de la URAC (Unidad de Rescate Agreste Chena, Cuerpo de Bomberos 
 | 2026-10-20 | Disponibilidad se mantiene entre fases; sin WhatsApp al cambiar de fase. |
 | 2026-10-20 | Importar lista de integrantes (solo Administrador); vista previa con escudo URAC en WhatsApp. |
 | 2026-10-21 | Este documento de historial. |
+| 2026-10-21 | Fichas médicas en PDF con acceso restringido (LUMED/Admin siempre; Líder de Unidad solo si el integrante está disponible). |
 
 ## 7. Pendientes conocidos
 
